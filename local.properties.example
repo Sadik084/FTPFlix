@@ -1,0 +1,15 @@
+# Copy this file to local.properties and fill in your own values.
+sdk.dir=C\:\\Android\\Sdk
+
+# TMDB API key: https://www.themoviedb.org/settings/api
+TMDB_API_KEY=your_tmdb_api_key
+
+# HdHub addon URL.
+HDHUB_ADDON_URL=https://your-hdhub-addon-url
+
+# GitHub release source for in-app OTA updates.
+GITHUB_OWNER=your-github-username
+GITHUB_REPO=ftpflix
+
+# GitHub API base.
+GITHUB_RELEASE_API=https://api.github.com

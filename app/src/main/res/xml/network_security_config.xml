@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Block cleartext everywhere by default (metadata/catalog use HTTPS). -->
+    <base-config cleartextTrafficPermitted="false" />
+
+    <!-- Allow cleartext only for the private FTPFlix host on the LAN. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">192.168.110.67</domain>
+    </domain-config>
+
+    <!-- The FTPFlix index aggregates playable files served from public FTP mirrors on plain HTTP. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">circleftp.net</domain>
+    </domain-config>
+</network-security-config>

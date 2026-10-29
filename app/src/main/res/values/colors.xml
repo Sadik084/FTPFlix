@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ftp_background">#0D0E11</color>
+    <!-- Dark navy launcher background to match the blue brand mark. -->
+    <color name="ic_launcher_background">#0A172E</color>
+</resources>

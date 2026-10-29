@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FTPFlix app mark (adapted from the 512x512 SVG logo).
+     The group maps the 512 design space (centered at 254,282) into the
+     108x108 adaptive-icon viewport at scale 0.20, keeping the whole mark
+     inside the mask-safe zone (no edge clipping). Keep in sync with the
+     master SVG if the brand is updated. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <group
+        android:pivotX="254"
+        android:pivotY="282"
+        android:scaleX="0.20"
+        android:scaleY="0.20"
+        android:translateX="-200"
+        android:translateY="-228">
+
+        <!-- Play glyph: blue -> sky diagonal gradient -->
+        <path android:pathData="M180,140 L380,260 C398,271 398,293 380,304 L180,424 C160,436 130,420 130,396 L130,168 C130,144 160,128 180,140 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="0" android:startY="0"
+                    android:endX="512" android:endY="512"
+                    android:startColor="#2563EB"
+                    android:endColor="#38BDF8" />
+            </aapt:attr>
+        </path>
+
+        <!-- FTP network lines: dark cutout base -->
+        <path
+            android:pathData="M110,282 L255,282 M255,282 L315,227 M255,282 L315,337"
+            android:fillColor="#00000000"
+            android:strokeColor="#0B0F19"
+            android:strokeWidth="22"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+
+        <!-- FTP network lines: accent gradient overlay -->
+        <path
+            android:pathData="M110,282 L255,282 M255,282 L315,227 M255,282 L315,337"
+            android:fillColor="#00000000"
+            android:strokeWidth="12"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round">
+            <aapt:attr name="android:strokeColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="0" android:startY="512"
+                    android:endX="512" android:endY="0"
+                    android:startColor="#38BDF8"
+                    android:endColor="#FFFFFF" />
+            </aapt:attr>
+        </path>
+
+        <!-- Network data dots (accent gradient) -->
+        <path android:pathData="M315,227 m-14,0 a14,14 0 1,0 28,0 a14,14 0 1,0 -28,0">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="0" android:startY="512"
+                    android:endX="512" android:endY="0"
+                    android:startColor="#38BDF8"
+                    android:endColor="#FFFFFF" />
+            </aapt:attr>
+        </path>
+        <path android:pathData="M315,337 m-14,0 a14,14 0 1,0 28,0 a14,14 0 1,0 -28,0">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="0" android:startY="512"
+                    android:endX="512" android:endY="0"
+                    android:startColor="#38BDF8"
+                    android:endColor="#FFFFFF" />
+            </aapt:attr>
+        </path>
+
+        <!-- Network hub dot (solid blue) -->
+        <path
+            android:pathData="M110,282 m-12,0 a12,12 0 1,0 24,0 a12,12 0 1,0 -24,0"
+            android:fillColor="#2563EB" />
+    </group>
+</vector>
