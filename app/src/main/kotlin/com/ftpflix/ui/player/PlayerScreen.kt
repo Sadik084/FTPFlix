@@ -390,13 +390,15 @@ fun PlayerScreen(
         }
 
         seekPulse?.let { pulse ->
-            SeekPulseOverlay(
-                forward = pulse.forward,
-                onDone = { if (seekPulse?.id == pulse.id) seekPulse = null },
-                modifier = Modifier.align(
-                    if (pulse.forward) Alignment.CenterEnd else Alignment.CenterStart
+            androidx.compose.runtime.key(pulse.id) {
+                SeekPulseOverlay(
+                    forward = pulse.forward,
+                    onDone = { if (seekPulse?.id == pulse.id) seekPulse = null },
+                    modifier = Modifier.align(
+                        if (pulse.forward) Alignment.CenterEnd else Alignment.CenterStart
+                    )
                 )
-            )
+            }
         }
 
         if (ui.buffering && ui.error == null) {
@@ -755,10 +757,9 @@ private fun VerticalGestureSlider(
         animationSpec = tween(150),
         label = "sliderTrack"
     )
-    // Fill tracks the finger 1:1 during a drag (no lag); animate only the
-    // initial appearance from zero.
-    val animatedFill = remember { Animatable(0f) }
-    LaunchedEffect(Unit) { animatedFill.animateTo(value, tween(220)) }
+    // Fill tracks the finger 1:1 during a drag; initial state starts at current level.
+    val animatedFill = remember { Animatable(value) }
+    LaunchedEffect(value) { animatedFill.animateTo(value, tween(150)) }
     val fill = if (animatedFill.isRunning) animatedFill.value else value
     Box(
         modifier

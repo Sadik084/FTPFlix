@@ -62,7 +62,6 @@ import com.ftpflix.sources.resolve.SeriesSeason
 import com.ftpflix.sources.resolve.StreamSource
 import com.ftpflix.ui.components.PlayButton
 import com.ftpflix.ui.components.ScrollRefreshRateHint
-import com.ftpflix.ui.components.StaticRefreshRateHint
 import com.ftpflix.ui.theme.Spacing
 
 // Playback request: stream URL + display metadata for history rows.
@@ -85,8 +84,6 @@ fun DetailsScreen(
     val ui by vm.ui.collectAsStateWithLifecycle()
     val metadata = ui.metadata
     val context = LocalContext.current
-    // Low refresh-rate kicks in after the enter transition finishes.
-    StaticRefreshRateHint(delayMs = 700L)
 
 
     LaunchedEffect(metadata?.title) {

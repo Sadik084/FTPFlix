@@ -1,10 +1,7 @@
 package com.ftpflix.ui.navigation
 
-import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
@@ -45,10 +42,7 @@ import com.ftpflix.ui.search.SeeAllScreen
 import com.ftpflix.ui.settings.SettingsScreen
 import com.ftpflix.ui.theme.Motion
 
-// Nav taps are guarded by the current entry's lifecycle instead of a time debounce:
-// a back stack entry is only RESUMED while no NavHost transition is in flight, so
-// taps made during a transition (the classic stuck-page / double-navigation trigger)
-// are dropped without hard-coding a duration (N9).
+// Only navigate when the current screen is idle, so taps during a transition are dropped.
 private fun NavHostController.canNavigate() =
     currentBackStackEntry?.lifecycle?.currentState == Lifecycle.State.RESUMED
 
@@ -146,19 +140,12 @@ fun AppNavHost(navController: NavHostController = rememberNavController()) {
             )
         },
     ) {
-        // Directional transitions (N2–N5):
-        //  - Tab switches slide according to tab index (Home 0, Search 1, Library 2, MyList 3,
-        //    Settings 4), no fade: a full-width slide plus a cross-fade of two opaque pages
-        //    dims through the window background mid-transition (N5).
-        //  - Pushes slide the new page in at full width while the old page parallaxes a
-        //    quarter width underneath; no fade on either side (N5).
-        //  - Pops use PopSlide (LinearEasing, one shared duration) so a predictive-back
-        //    gesture tracks the finger, and the revealed page parallaxes in with no fade,
-        //    so it is visible from the first frame of the gesture (N3).
-        //  - The player is a vertical modal: the screen underneath holds still while it
-        //    rises (KeepUntilTransitionsFinished) and is revealed in place (None) on the
-        //    way back; the player itself shrinks + fades on pop, driven by the horizontal
-        //    back gesture, never a vertical slide (N2/N4).
+        // Transitions:
+        //  - Tab switches slide by tab index.
+        //  - Pushes slide the new page in; the old page parallaxes a quarter width.
+        //  - Back pops slide out full width while the revealed page slides in a quarter,
+        //    using one shared LinearEasing duration so the gesture tracks the finger.
+        //  - Player opens as a vertical modal rise; back uses the same slide as any page.
         NavHost(
             navController = navController,
             startDestination = HomeRoute,
@@ -192,40 +179,23 @@ fun AppNavHost(navController: NavHostController = rememberNavController()) {
                 }
             },
             popEnterTransition = {
-                when {
-                    // The screen revealed under the player holds still (N2) and is fully
-                    // visible from the first frame of the gesture (N3).
-                    initialState.destination.hasRoute<PlayerRoute>() -> EnterTransition.None
-                    else -> {
-                        val initialIdx = topLevelIndex(initialState.destination)
-                        val targetIdx = topLevelIndex(targetState.destination)
-                        if ((initialIdx != -1) && (targetIdx != -1)) {
-                            val fromLeft = targetIdx < initialIdx
-                            slideInHorizontally(Motion.PopSlide) { if (fromLeft) -it / 4 else it / 4 }
-                        } else {
-                            // Pop: parallax in, no fade (N3).
-                            slideInHorizontally(Motion.PopSlide) { -it / 4 }
-                        }
-                    }
+                val initialIdx = topLevelIndex(initialState.destination)
+                val targetIdx = topLevelIndex(targetState.destination)
+                if ((initialIdx != -1) && (targetIdx != -1)) {
+                    val fromLeft = targetIdx < initialIdx
+                    slideInHorizontally(Motion.PopSlide) { if (fromLeft) -it / 4 else it / 4 }
+                } else {
+                    slideInHorizontally(Motion.PopSlide) { -it / 4 }
                 }
             },
             popExitTransition = {
-                when {
-                    // Player pop: Material shrink + fade, seekable by the (horizontal)
-                    // back gesture, never a vertical slide (N4).
-                    initialState.destination.hasRoute<PlayerRoute>() ->
-                        scaleOut(Motion.PopScale, targetScale = 0.9f) + fadeOut(Motion.PopFade)
-                    else -> {
-                        val initialIdx = topLevelIndex(initialState.destination)
-                        val targetIdx = topLevelIndex(targetState.destination)
-                        if ((initialIdx != -1) && (targetIdx != -1)) {
-                            val exitLeft = targetIdx > initialIdx
-                            slideOutHorizontally(Motion.PopSlide) { if (exitLeft) -it else it }
-                        } else {
-                            // Pop: slide out at full width, no fade (N3).
-                            slideOutHorizontally(Motion.PopSlide) { it }
-                        }
-                    }
+                val initialIdx = topLevelIndex(initialState.destination)
+                val targetIdx = topLevelIndex(targetState.destination)
+                if ((initialIdx != -1) && (targetIdx != -1)) {
+                    val exitLeft = targetIdx > initialIdx
+                    slideOutHorizontally(Motion.PopSlide) { if (exitLeft) -it else it }
+                } else {
+                    slideOutHorizontally(Motion.PopSlide) { it }
                 }
             },
         ) {
@@ -270,9 +240,7 @@ fun AppNavHost(navController: NavHostController = rememberNavController()) {
                     },
                 )
             }
-            // Details/SeeAll/History/Player used to repeat the global transitions as
-            // per-destination overrides; they were identical, so they are gone: one
-            // place to maintain is safer (N2).
+            // Detail screens share the global transitions above.
             composable<DetailsRoute> {
                 DetailsScreen(
                     onBack = { navController.popSafely() },
@@ -292,8 +260,7 @@ fun AppNavHost(navController: NavHostController = rememberNavController()) {
             }
             composable<PlayerRoute>(
                 enterTransition = {
-                    // The open stays a vertical modal slide; the pop is the global
-                    // scale+fade above (N4).
+                    // Opens as a vertical modal rise; back slides out like any other page.
                     slideInVertically(Motion.PlayerSlide) { it } + fadeIn(Motion.PlayerFade)
                 },
             ) {

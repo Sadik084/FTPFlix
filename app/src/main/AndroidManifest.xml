@@ -17,7 +17,7 @@
         android:supportsRtl="true"
         android:networkSecurityConfig="@xml/network_security_config"
         android:usesCleartextTraffic="false"
-        android:enableOnBackInvokedCallback="true"
+        android:enableOnBackInvokedCallback="false"
         android:theme="@style/Theme.FTPFlix">
 
         <!-- uiMode deliberately NOT in configChanges: handling it blocks
@@ -28,6 +28,7 @@
             android:exported="true"
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:enableOnBackInvokedCallback="false"
             android:theme="@style/Theme.FTPFlix">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
