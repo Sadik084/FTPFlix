@@ -113,6 +113,37 @@ class StreamResolver @Inject constructor(
         return stream
     }
 
+    /** Next best playable stream after [exclude] URLs failed to decode. */
+    suspend fun resolveAlternate(
+        title: String,
+        year: Int?,
+        imdbId: String? = null,
+        exclude: Set<String>,
+    ): ResolvedStream? {
+        // Smaller encodes are often real H.264 even when the 1080p one is mislabeled HEVC.
+        val lower = resolve(title, year, imdbId, force = true, preferredHeight = 720)
+        if (lower != null && lower.url !in exclude && httpProbe.headOk(lower.url)) {
+            Log.d(TAG, "resolveAlternate 720p '$title' -> ${lower.url}")
+            return lower
+        }
+        val order = sourceSettings.sourceOrder.first()
+        val enabled = sourceSettings.enabledSources.first()
+        for (s in order) {
+            if (s !in enabled) continue
+            val hit = when (s) {
+                StreamSource.CIRCLE_FTP -> tryCircle(title, year, null)
+                StreamSource.ROAR_ZONE -> tryRoar(imdbId, title, year, null)
+                StreamSource.HD_HUB -> tryHdHub(imdbId, null)
+                StreamSource.AUTO -> null
+            }
+            if (hit != null && hit.url !in exclude && httpProbe.headOk(hit.url)) {
+                Log.d(TAG, "resolveAlternate ${s.name} '$title' -> ${hit.url}")
+                return hit
+            }
+        }
+        return null
+    }
+
     // Sequential user-ordered cascade: enabled sources tried until one hits.
     private suspend fun resolveFromSources(
         title: String,

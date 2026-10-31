@@ -3,6 +3,7 @@ package com.ftpflix.update
 import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import androidx.core.content.edit
 import androidx.core.net.toUri
 import com.ftpflix.BuildConfig
@@ -56,10 +57,15 @@ data class GitHubRelease(
     val body: String? = null,
     val assets: List<GitHubAsset> = emptyList(),
 ) {
-    /** The installable asset: an .apk entry (content type checked when present). */
-    fun apkAsset(): GitHubAsset? = assets.firstOrNull { (name, _, _, contentType) ->
-        name.endsWith(".apk", ignoreCase = true) &&
-            (contentType.isBlank() || contentType.contains("android", ignoreCase = true))
+    /** Picks the installable APK: ABI-specific first, then universal, then any. */
+    fun apkAsset(abi: String? = null): GitHubAsset? {
+        val apks = assets.filter { (name, _, _, contentType) ->
+            name.endsWith(".apk", ignoreCase = true) &&
+                (contentType.isBlank() || contentType.contains("android", ignoreCase = true))
+        }
+        abi?.let { a -> apks.firstOrNull { it.name.contains(a, ignoreCase = true) } }?.let { return it }
+        apks.firstOrNull { it.name.contains("universal", ignoreCase = true) }?.let { return it }
+        return apks.firstOrNull()
     }
 }
 
@@ -240,6 +246,9 @@ class AppUpdateManager @Inject constructor(
     private fun canRequestInstalls(): Boolean =
         context.packageManager.canRequestPackageInstalls()
 
+    /** Device ABI (e.g. "arm64-v8a") used to pick the matching APK asset. */
+    private fun currentAbi(): String? = Build.SUPPORTED_ABIS.firstOrNull()
+
     private suspend fun fetchLatestRelease(): Result<GitHubRelease> = withContext(Dispatchers.IO) {
         try {
             val url = "${BuildConfig.GITHUB_RELEASE_API}/repos/${BuildConfig.GITHUB_OWNER}/${BuildConfig.GITHUB_REPO}/releases/latest"
@@ -263,7 +272,7 @@ class AppUpdateManager @Inject constructor(
     }
 
     private fun onReleaseChecked(release: GitHubRelease) {
-        val apk = release.apkAsset()
+        val apk = release.apkAsset(currentAbi())
         val latest = parseVersion(release.tagName)
         val current = parseVersion(BuildConfig.VERSION_NAME) ?: listOf(0)
         when {

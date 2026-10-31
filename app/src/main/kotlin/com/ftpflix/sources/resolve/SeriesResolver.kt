@@ -4,7 +4,10 @@ import android.util.Log
 import com.ftpflix.core.config.SourceHealthStore
 import com.ftpflix.core.config.SourceSettingsStore
 import com.ftpflix.domain.parser.TitleNormalizer
+import com.ftpflix.sources.HttpProbe
 import com.ftpflix.sources.circleapi.CircleFtpResolver
+import com.ftpflix.sources.hdhub.HdHubApi
+import com.ftpflix.sources.hdhub.HdHubResolver
 import com.ftpflix.sources.roarzone.RoarZoneResolver
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
@@ -18,6 +21,8 @@ import kotlin.time.Duration.Companion.milliseconds
 class SeriesResolver @Inject constructor(
     private val circleApi: CircleFtpResolver,
     private val roarZone: RoarZoneResolver,
+    private val hdhub: HdHubResolver,
+    private val httpProbe: HttpProbe,
     private val sourceHealth: SourceHealthStore,
     private val sourceSettings: SourceSettingsStore,
 ) {
@@ -123,6 +128,101 @@ class SeriesResolver @Inject constructor(
         }
         val catalog = buildCatalog(title, episodes)
         return catalog
+    }
+
+    /** Raw episode list from one source, not collapsed to the best-per-episode stream. */
+    private suspend fun rawEpisodesFrom(
+        source: StreamSource,
+        title: String,
+        year: Int?,
+        imdbId: String?,
+        seasonCount: Int?,
+    ): List<EpisodeStream> = when (source) {
+        StreamSource.CIRCLE_FTP ->
+            if (sourceHealth.circleFtpEnabled.first()) {
+                runCatchingSuspend {
+                    withTimeoutOrNull(API_TIMEOUT_MS.milliseconds) {
+                        circleApi.resolveSeries(title, year, null)
+                    }
+                }.getOrNull().orEmpty()
+            } else emptyList()
+        StreamSource.ROAR_ZONE ->
+            if (sourceHealth.roarZoneEnabled.first()) {
+                runCatchingSuspend {
+                    withTimeoutOrNull(API_TIMEOUT_MS.milliseconds) {
+                        roarZone.resolveSeries(imdbId, title, seasonCount, null)
+                    }
+                }.getOrNull().orEmpty()
+            } else emptyList()
+        else -> emptyList()
+    }
+
+    private val resolutionTag = Regex("""\b(2160|1440|1080|720|576|480)p\b""")
+
+    private fun resolutionOf(text: String): String? =
+        resolutionTag.find(text)?.groupValues?.get(1)?.toIntOrNull()?.let { "${it}p" }
+
+    private fun sourceForHost(url: String): StreamSource? = when {
+        url.contains("circleftp", ignoreCase = true) -> StreamSource.CIRCLE_FTP
+        url.contains("roarzone", ignoreCase = true) -> StreamSource.ROAR_ZONE
+        else -> null
+    }
+
+    /** Another playable stream for the same episode, preferring the failed resolution in the same source. */
+    suspend fun alternateEpisode(
+        title: String,
+        year: Int?,
+        imdbId: String?,
+        seasonCount: Int?,
+        season: Int?,
+        episode: Int?,
+        failedUrl: String,
+        exclude: Set<String>,
+    ): EpisodeStream? {
+        if (season == null || episode == null) return null
+        val order = sourceSettings.sourceOrder.first()
+        val enabled = sourceSettings.enabledSources.first()
+        val failedSource = sourceForHost(failedUrl)
+
+        fun pick(candidates: Sequence<EpisodeStream>, preferRes: String?): EpisodeStream? {
+            val fit = candidates.filter {
+                it.url !in exclude && it.season == season && it.episode == episode
+            }
+            return fit.firstOrNull { preferRes == null || resolutionOf(it.title) == preferRes }
+                ?: fit.firstOrNull()
+        }
+
+        if (failedSource != null && failedSource in enabled) {
+            val sameSource = rawEpisodesFrom(failedSource, title, year, imdbId, seasonCount).asSequence()
+            pick(sameSource, resolutionOf(failedUrl))?.let { return it }
+        }
+
+        for (s in order) {
+            if (s !in enabled || s == failedSource) continue
+            val candidates = rawEpisodesFrom(s, title, year, imdbId, seasonCount).asSequence()
+            pick(candidates, null)?.let { return it }
+        }
+
+        // HdHub has no browse endpoint, but it can resolve one episode on demand.
+        if (StreamSource.HD_HUB in enabled && imdbId != null) {
+            val hub = runCatchingSuspend {
+                withTimeoutOrNull(API_TIMEOUT_MS.milliseconds) {
+                    hdhub.resolveEpisode(imdbId, season, episode, null)
+                }
+            }.getOrNull()
+            if (hub != null && hub.url !in exclude && httpProbe.headOk(hub.url)) {
+                return EpisodeStream(
+                    url = hub.url,
+                    host = HdHubApi.HOST_LABEL,
+                    title = "",
+                    season = season,
+                    episode = episode,
+                    sizeDisplay = hub.sizeDisplay,
+                    score = 300,
+                )
+            }
+        }
+        return null
     }
 
     private fun EpisodeStream.isValidPlacement(): Boolean =

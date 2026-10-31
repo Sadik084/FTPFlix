@@ -98,6 +98,16 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    // ABI split APKs plus a universal APK for side-loading; GitHub OTA picks the file matching the device ABI.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            isUniversalApk = true
+        }
+    }
 }
 
 dependencies {
@@ -151,4 +161,25 @@ dependencies {
     implementation(libs.palette.ktx)
     implementation(libs.work.runtime.ktx)
     implementation(libs.androidx.profileinstaller)
+}
+
+// Copies split/universal release APKs into an ota/ folder with publish-ready names.
+tasks.register("prepareOtaApks") {
+    dependsOn("assembleRelease")
+    val apkDir = layout.buildDirectory.dir("outputs/apk/release")
+    val otaDir = layout.buildDirectory.dir("outputs/apk/release/ota")
+    doLast {
+        val src = apkDir.get().asFile
+        val dst = otaDir.get().asFile
+        dst.mkdirs()
+        src.listFiles { f -> f.isFile && f.extension == "apk" }?.forEach { apk ->
+            val name = when {
+                apk.name.contains("arm64-v8a") -> "FTPFlix-arm64-v8a.apk"
+                apk.name.contains("armeabi-v7a") -> "FTPFlix-armeabi-v7a.apk"
+                apk.name.contains("x86_64") -> "FTPFlix-x86_64.apk"
+                else -> "FTPFlix-universal.apk"
+            }
+            apk.copyTo(File(dst, name), overwrite = true)
+        }
+    }
 }

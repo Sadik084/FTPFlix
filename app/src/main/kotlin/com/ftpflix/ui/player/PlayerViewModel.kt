@@ -54,6 +54,7 @@ data class PlayerUi(
     val buffering: Boolean = true,
     val isPlaying: Boolean = false,
     val error: String? = null,
+    val notice: String? = null,
     val speed: Float = 1f,
     val videoWidth: Int = 0,
     val videoHeight: Int = 0,
@@ -177,6 +178,9 @@ class PlayerViewModel @Inject constructor(
     private var displayEpisodeLabel: String = ""
     private var displayYear: Int? = null
     private var retried = false
+    private val rejectedUrls = mutableSetOf<String>()
+    private var altAttempts = 0
+    @Volatile private var altInFlight = false
     @Volatile private var nextUpHidden = false
 
     // Bitrate sampling state ("stats for nerds").
@@ -267,12 +271,16 @@ class PlayerViewModel @Inject constructor(
             override fun onPlayerError(error: PlaybackException) {
                 saveProgressNow()
                 // Log the failure type so playable-but-undecodable streams are easy to spot.
-                val isCodecError = error.errorCode in CODEC_ERROR_RANGE
+                val isDecoderError = error.errorCode in DECODER_ERRORS
                 Log.e(
                     TAG,
-                    "Playback error code=${error.errorCode} codecError=$isCodecError url=${mediaKey ?: "?"} msg=${error.message}",
+                    "Playback error code=${error.errorCode} decoderError=$isDecoderError url=${mediaKey ?: "?"} msg=${error.message}",
                     error
                 )
+                if (isDecoderError) {
+                    tryAlternateSource(bestKnownPositionMs())
+                    return
+                }
                 if (!retried) {
                     retried = true
                     // Retry from the last known position, never from 0.
@@ -317,11 +325,7 @@ class PlayerViewModel @Inject constructor(
                     return
                 }
                 _ui.update {
-                    it.copy(error = if (isCodecError) {
-                        "Could not play this file: the video codec isn't supported on this device. Try a different quality or source."
-                    } else {
-                        "Could not play this file. Please try again."
-                    })
+                    it.copy(error = "Could not play this file. Please try again.")
                 }
             }
         })
@@ -354,6 +358,9 @@ class PlayerViewModel @Inject constructor(
     private fun startPlayback(key: String, url: Uri) {
         resetVideoSize()
         lastKnownPositionMs = 0
+        rejectedUrls.clear()
+        altAttempts = 0
+        altInFlight = false
         _ui.update { it.copy(
             serverHost = url.host?.takeIf { h -> h.isNotBlank() },
             fileSizeBytes = 0L
@@ -485,9 +492,14 @@ class PlayerViewModel @Inject constructor(
         nextUpHidden = false
         _showNextUp.value = false
         retried = false
+        rejectedUrls.clear()
+        altAttempts = 0
+        altInFlight = false
         mediaKey = ep.url
         lastKnownPositionMs = 0
-        _ui.update { it.copy(title = currentEpisodeLabel(), error = null, buffering = true) }
+        _ui.update {
+            it.copy(title = currentEpisodeLabel(), error = null, notice = null, buffering = true)
+        }
         resetVideoSize()
         player.setMediaItem(MediaItem.fromUri(ep.url.toUri()))
         player.prepare()
@@ -728,6 +740,84 @@ class PlayerViewModel @Inject constructor(
         player.playWhenReady = true
     }
 
+    /** Tries another source/quality after a decoder failure (e.g. HEVC 10-bit on unsupported hardware). */
+    private fun tryAlternateSource(pos: Long) {
+        val failed = mediaKey ?: return
+        if (altInFlight) return
+        altInFlight = true
+        rejectedUrls += failed
+        if (altAttempts++ >= MAX_ALT_ATTEMPTS) {
+            altInFlight = false
+            _ui.update {
+                it.copy(error = "No playable version found for this device.", notice = null, buffering = false)
+            }
+            return
+        }
+        _ui.update {
+            it.copy(
+                buffering = true,
+                notice = "Your device can't decode this video format. Trying an alternate source..."
+            )
+        }
+        viewModelScope.launch {
+            try {
+                val title = displayTitle.ifBlank { displayEpisodeLabel.ifBlank { "" } }
+                if (title.isBlank()) {
+                    _ui.update {
+                        it.copy(
+                            error = "No playable version found for this device.",
+                            notice = null,
+                            buffering = false
+                        )
+                    }
+                    return@launch
+                }
+                val meta = resolveMetadata()
+                val altUrl: String? = if (playbackSession.hasEpisodes) {
+                    seriesResolver.alternateEpisode(
+                        title = title,
+                        year = displayYear,
+                        imdbId = meta?.imdbId,
+                        seasonCount = meta?.numberOfSeasons,
+                        season = playbackSession.current()?.season,
+                        episode = playbackSession.current()?.episode,
+                        failedUrl = failed,
+                        exclude = rejectedUrls,
+                    )?.url
+                } else {
+                    streamResolver.resolveAlternate(
+                        title = title,
+                        year = displayYear,
+                        imdbId = meta?.imdbId,
+                        exclude = rejectedUrls,
+                    )?.url
+                }
+                if (altUrl == null) {
+                    _ui.update {
+                        it.copy(
+                            error = "No playable version found for this device.",
+                            notice = null,
+                            buffering = false
+                        )
+                    }
+                } else {
+                    mediaKey = altUrl
+                    retried = false
+                    _ui.update { it.copy(notice = null) }
+                    playUrl(altUrl, pos)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _ui.update {
+                    it.copy(error = "Could not play this file. Please try again.", notice = null, buffering = false)
+                }
+            } finally {
+                altInFlight = false
+            }
+        }
+    }
+
     override fun onCleared() {
         // Player is still valid on the main thread here; capture then persist.
         saveProgressNow()
@@ -738,7 +828,10 @@ class PlayerViewModel @Inject constructor(
         const val NEXT_UP_WINDOW_MS = 75_000L
         const val MAX_BITRATE_SAMPLES = 120
         private const val TAG = "PlayerViewModel"
-        /** PlaybackException codes in this range are decode/format related (not network). */
-        private val CODEC_ERROR_RANGE = 1000..1999
+        /** Decoder-related PlaybackException codes (video/audio codec failures, not network). */
+        private val DECODER_ERRORS =
+            PlaybackException.ERROR_CODE_DECODER_INIT_FAILED..
+                PlaybackException.ERROR_CODE_DECODING_RESOURCES_RECLAIMED
+        private const val MAX_ALT_ATTEMPTS = 3
     }
 }

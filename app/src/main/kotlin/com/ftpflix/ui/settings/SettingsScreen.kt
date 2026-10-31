@@ -41,6 +41,7 @@ import androidx.compose.material3.Snackbar
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.rounded.Smartphone
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -85,6 +86,7 @@ fun SettingsScreen(
     var confirmClearStreams by remember { mutableStateOf(value = false) }
     var confirmClearMeta by remember { mutableStateOf(value = false) }
     var confirmResetAll by remember { mutableStateOf(value = false) }
+    var showDeviceCheck by remember { mutableStateOf(value = false) }
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Column(
@@ -222,6 +224,18 @@ fun SettingsScreen(
                         }
                     }
                 }
+            }
+
+            Spacer(Modifier.height(Spacing.xl))
+
+            SectionLabel("Device")
+            GroupCard {
+                SettingsRow(
+                    icon = Icons.Rounded.Smartphone,
+                    title = "Device check",
+                    subtitle = "See which codecs this phone supports",
+                    onClick = { showDeviceCheck = true },
+                )
             }
 
             Spacer(Modifier.height(Spacing.xl))
@@ -376,6 +390,10 @@ fun SettingsScreen(
         onConfirm = { vm.clearHistory(); confirmResetAll = false },
         onDismiss = { confirmResetAll = false }
     )
+
+    if (showDeviceCheck) {
+        DeviceCheckDialog(onDismiss = { showDeviceCheck = false })
+    }
 }
 
 @Composable

@@ -74,6 +74,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -407,6 +408,25 @@ fun PlayerScreen(
                 color = Color.White,
                 strokeWidth = 3.dp
             )
+        }
+
+        ui.notice?.let { notice ->
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 84.dp)
+                    .fillMaxWidth(0.86f),
+                shape = RoundedCornerShape(50),
+                color = Color.Black.copy(alpha = 0.72f),
+            ) {
+                Text(
+                    notice,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+                    color = Color.White,
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
         }
 
         if (ui.error != null) {
