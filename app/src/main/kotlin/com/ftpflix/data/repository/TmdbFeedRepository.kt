@@ -67,10 +67,10 @@ class TmdbFeedRepository @Inject constructor(
             val tvGenresD = async { runCatching { tmdb.tvGenres(apiKey).genres }.getOrDefault(emptyList()) }
             val trendingMoviesD = async { runCatching { tmdb.trending("movie", apiKey, page).results }.getOrDefault(emptyList()) }
             val trendingTvD = async { runCatching { tmdb.trending("tv", apiKey, page).results }.getOrDefault(emptyList()) }
-            val popularMoviesD = async { runCatching { tmdb.discover("movie", apiKey, sortBy = movieSort, page = page).results }.getOrDefault(emptyList()) }
-            val newMoviesD = async { runCatching { tmdb.discover("movie", apiKey, sortBy = "primary_release_date.desc", page = page).results }.getOrDefault(emptyList()) }
-            val popularTvD = async { runCatching { tmdb.discover("tv", apiKey, sortBy = tvSort, page = page).results }.getOrDefault(emptyList()) }
-            val newTvD = async { runCatching { tmdb.discover("tv", apiKey, sortBy = "first_air_date.desc", page = page).results }.getOrDefault(emptyList()) }
+            val popularMoviesD = async { runCatching { tmdb.discover("movie", apiKey, sortBy = movieSort, page = page, primaryReleaseDateLte = today).results }.getOrDefault(emptyList()) }
+            val newMoviesD = async { runCatching { tmdb.discover("movie", apiKey, sortBy = "primary_release_date.desc", page = page, primaryReleaseDateLte = today).results }.getOrDefault(emptyList()) }
+            val popularTvD = async { runCatching { tmdb.discover("tv", apiKey, sortBy = tvSort, page = page, firstAirDateLte = today).results }.getOrDefault(emptyList()) }
+            val newTvD = async { runCatching { tmdb.discover("tv", apiKey, sortBy = "first_air_date.desc", page = page, firstAirDateLte = today).results }.getOrDefault(emptyList()) }
 
             val movieGenreNames = movieGenresD.await().associate { it.id to it.name }
             val tvGenreNames = tvGenresD.await().associate { it.id to it.name }

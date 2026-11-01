@@ -70,7 +70,7 @@ class RoarZoneApi @Inject constructor(
     private var cachedToken: String? = null
     private var tokenExpiry = 0L
 
-    // One stable id per process; Emby counts new ids as new devices.
+    // Stable device id per process.
     private val deviceId = "ftpflix-${UUID.randomUUID()}"
 
     suspend fun currentToken(force: Boolean = false): String? = tokenMutex.withLock {

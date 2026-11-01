@@ -84,7 +84,18 @@ interface TmdbService {
         @Query("query") textQuery: String? = null,
         @Query("page") page: Int = 1,
         @Query("language") language: String = "en-US",
+        // Released titles only.
+        @Query("primary_release_date.lte") primaryReleaseDateLte: String? = null,
+        @Query("first_air_date.lte") firstAirDateLte: String? = null,
     ): TmdbPaged<TmdbMovie>
+
+    // Light tv details; used for the season list.
+    @GET("tv/{id}")
+    suspend fun tvSeasonList(
+        @Path("id") id: Long,
+        @Query("api_key") apiKey: String,
+        @Query("language") language: String = "en-US",
+    ): TmdbTvSeasonList
 
     @GET("tv/{id}/season/{season}")
     suspend fun tvSeasonDetails(

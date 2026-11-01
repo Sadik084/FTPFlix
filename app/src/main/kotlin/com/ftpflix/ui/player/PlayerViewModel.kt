@@ -31,6 +31,7 @@ import com.ftpflix.sources.HttpProbe
 import com.ftpflix.sources.resolve.EpisodeStream
 import com.ftpflix.sources.resolve.SeriesResolver
 import com.ftpflix.sources.resolve.StreamResolver
+import com.ftpflix.sources.resolve.withTmdbSeasons
 import kotlinx.coroutines.CancellationException
 import com.ftpflix.ui.navigation.PlayerRoute
 import androidx.navigation.toRoute
@@ -332,7 +333,7 @@ class PlayerViewModel @Inject constructor(
                                 retried = false
                                 playUrl(fresh.url, pos)
                             }
-                            // Same URL came back: still dead, so hop to another source.
+                            // Same URL again: try another source.
                             fresh != null && fresh.url == mediaKey ->
                                 tryAlternateSource(pos, notice = SOURCE_RETRY_NOTICE)
                             fresh != null -> retrySameItem(pos)
@@ -432,20 +433,49 @@ class PlayerViewModel @Inject constructor(
         } catch (_: Exception) {
             null
         } ?: return
-        val flat = catalog.sortedSeasons().flatMap { it.episodes }
+        // TMDB seasons the sources don't list yet.
+        val counts = try {
+            metadataRepo.seasonEpisodeCounts(contentKey.removePrefix("tmdb:"))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            emptyMap()
+        }
+        val merged = catalog.withTmdbSeasons(counts)
+        val flat = merged.sortedSeasons().flatMap { it.episodes }
         if (flat.isEmpty()) return
+        // Match by url, then by the SxxEyy in the label, then season 1.
+        val (labelSeason, labelEpisode) = parseEpisodeLabel(displayEpisodeLabel)
         val index = flat.indexOfFirst { it.url == mediaKey }
             .takeIf { it >= 0 }
+            ?: flat.indexOfFirst { it.season == labelSeason && it.episode == labelEpisode }
+                .takeIf { it >= 0 }
             ?: flat.indexOfFirst { it.season == 1 } // best effort
+        val tmdbId = contentKey.removePrefix("tmdb:").removePrefix("tv:").toLongOrNull()
+        val names = if (tmdbId != null) {
+            try {
+                metadataRepo.seasonEpisodeNames(tmdbId, merged.sortedSeasons().map { it.number })
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                emptyMap()
+            }
+        } else emptyMap()
         playbackSession.set(
             seriesTitle = title,
             contentKey = contentKey,
             posterUrl = displayPosterUrl,
             episodes = flat,
-            episodeNames = emptyMap(),
+            episodeNames = names,
             currentIndex = index.coerceAtLeast(0)
         )
         _episodeIndex.value = index.coerceAtLeast(0)
+    }
+
+    // "S03E01 · Name" -> (3, 1); (-1, -1) when absent.
+    private fun parseEpisodeLabel(label: String): Pair<Int, Int> {
+        val m = Regex("(?i)\\bS(\\d{1,2})E(\\d{1,3})\\b").find(label) ?: return -1 to -1
+        return (m.groupValues[1].toIntOrNull() ?: -1) to (m.groupValues[2].toIntOrNull() ?: -1)
     }
 
     private fun startProgressSaving() {
@@ -509,8 +539,13 @@ class PlayerViewModel @Inject constructor(
     fun playEpisode(index: Int) {
         val episodes = playbackSession.episodes
         if (index !in episodes.indices) return
-        saveProgressNow()
         val ep = episodes[index]
+        // TMDB-only entry: resolve a stream first.
+        if (ep.url.isBlank()) {
+            resolveAndPlayEpisode(index)
+            return
+        }
+        saveProgressNow()
         playbackSession.currentIndex = index
         _episodeIndex.value = index
         nextUpHidden = false
@@ -530,6 +565,37 @@ class PlayerViewModel @Inject constructor(
             player.setMediaItem(MediaItem.fromUri(ep.url.toUri()))
             player.prepare()
             player.playWhenReady = true
+        }
+    }
+
+    // TMDB-only episode: find a stream, patch the session, then play.
+    private fun resolveAndPlayEpisode(index: Int) {
+        val ep = playbackSession.episodes.getOrNull(index) ?: return
+        _ui.update {
+            it.copy(title = currentEpisodeLabel(), error = null, notice = null, buffering = true)
+        }
+        viewModelScope.launch {
+            val meta = resolveMetadata()
+            val resolved = seriesResolver.alternateEpisode(
+                title = displayTitle,
+                year = displayYear,
+                imdbId = meta?.imdbId,
+                seasonCount = meta?.numberOfSeasons,
+                season = ep.season,
+                episode = ep.episode,
+                failedUrl = "",
+                exclude = emptySet(),
+            )
+            if (resolved == null) {
+                _ui.update {
+                    it.copy(buffering = false, error = "No source has this episode yet.")
+                }
+                return@launch
+            }
+            playbackSession.episodes = playbackSession.episodes
+                .toMutableList()
+                .also { it[index] = resolved }
+            playEpisode(index)
         }
     }
 

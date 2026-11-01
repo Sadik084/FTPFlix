@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Sources can return plain HTTP stream URLs; blocking cleartext breaks playback. -->
+    <!-- Stream sources may serve plain HTTP. -->
     <base-config cleartextTrafficPermitted="true" />
 </network-security-config>

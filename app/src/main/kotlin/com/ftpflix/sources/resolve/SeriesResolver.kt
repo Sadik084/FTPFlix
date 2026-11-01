@@ -82,12 +82,8 @@ class SeriesResolver @Inject constructor(
                     }
                 }.awaitAll()
             }
-            for (batch in batches) {
-                if (batch.isNotEmpty()) {
-                    episodes += batch
-                    break
-                }
-            }
+            // Merge episodes from all sources.
+            batches.forEach { episodes += it }
         }
 
         if (episodes.isEmpty()) {

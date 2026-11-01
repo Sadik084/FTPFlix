@@ -190,16 +190,18 @@ class LibraryViewModel @Inject constructor(
         }
         val next = page + 1
         val kind = kindFor(tab)
+        val today = LocalDate.now().toString()
         val (_, results, responseTotalPages, _) = tmdb.discover(
             kind, apiKey,
             sortBy = "popularity.desc",
             withGenres = genreIds?.takeIf { it.isNotEmpty() }?.joinToString(","),
             page = next,
+            primaryReleaseDateLte = if (kind == "movie") today else null,
+            firstAirDateLte = if (kind == "tv") today else null,
         )
         page = next
         totalPages = responseTotalPages.coerceAtLeast(1)
         if (results.isEmpty() || (page >= totalPages)) endReached = true
-        val today = LocalDate.now().toString()
         var rank = _items.value.size
         val fresh = results.asSequence()
             .mapNotNull { it.toFeedItem(kind, today, rank++) }

@@ -77,7 +77,7 @@ data class ResolvedStreamEntity(
     val host: String,
     val sizeDisplay: String,
     val resolvedAt: Long,
-    /** JSON-encoded HTTP headers for the stream; null when none. */
+    /** JSON stream headers; null when none. */
     val headers: String? = null
 )
 

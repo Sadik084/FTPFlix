@@ -46,6 +46,25 @@ class MetadataRepository @Inject constructor(
 
     private val seasonNamesCache = ConcurrentHashMap<Long, Map<Int, Map<Int, String>>>()
 
+    private val seasonCountsCache = ConcurrentHashMap<String, Map<Int, Int>>()
+
+    // TMDB season -> episode count; specials and empty stubs excluded.
+    suspend fun seasonEpisodeCounts(mediaId: String): Map<Int, Int> {
+        seasonCountsCache[mediaId]?.let { return it }
+        val m = idPattern.matchEntire(mediaId) ?: return emptyMap()
+        if (m.groupValues[1] != "tv") return emptyMap()
+        val id = m.groupValues[2].toLongOrNull() ?: return emptyMap()
+        val counts = runCatching {
+            withTimeout(12.seconds) {
+                tmdb.tvSeasonList(id, apiKey).seasons
+                    .filter { it.seasonNumber > 0 && it.episodeCount > 0 }
+                    .associate { it.seasonNumber to it.episodeCount }
+            }
+        }.getOrDefault(emptyMap())
+        if (counts.isNotEmpty()) seasonCountsCache[mediaId] = counts
+        return counts
+    }
+
     // Real episode names per season, cached in memory; failures fall back to "Episode N".
     suspend fun seasonEpisodeNames(
         tvId: Long,

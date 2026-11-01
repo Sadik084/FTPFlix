@@ -53,7 +53,7 @@ class RoarZoneResolver @Inject constructor(
         return ResolvedStream(winnerUrl, RoarZoneApi.HOST_LABEL, sizeDisplay)
     }
 
-    // Season sweep bounded by the TMDB season count.
+    // Season sweep; stops at the first empty season.
     suspend fun resolveSeries(
         imdbId: String?,
         title: String,
@@ -67,10 +67,15 @@ class RoarZoneResolver @Inject constructor(
             ?: return emptyList()
 
         val token = api.currentToken() ?: return emptyList()
-        val seasons = 1..(seasonCount?.coerceIn(1, MAX_SEASONS) ?: 1)
+        val known = seasonCount?.coerceIn(1, MAX_SEASONS) ?: 1
         val episodes = ArrayList<EpisodeStream>()
-        for (season in seasons) {
+        for (season in 1..MAX_SEASONS) {
             val eps = runCatching { api.episodes(seriesId, season) }.getOrDefault(emptyList())
+            if (eps.isEmpty()) {
+                // Keep probing up to the known season count.
+                if (season >= known) break
+                continue
+            }
             for (ep in eps) {
                 val id = ep.id ?: continue
                 val epNum = ep.indexNumber ?: continue

@@ -1082,9 +1082,12 @@ private fun EpisodesPanelContent(
         ) {
             itemsIndexed(
                 episodes.filter { it.season == selectedSeason },
-                key = { _, ep -> ep.url }
+                // TMDB-only rows share a blank url; key on season+episode too.
+                key = { _, ep -> "${ep.season}-${ep.episode}-${ep.url}" }
             ) { _, ep ->
-                val idx = episodes.indexOfFirst { it.url == ep.url }
+                val idx = episodes.indexOfFirst {
+                    it.season == ep.season && it.episode == ep.episode && it.url == ep.url
+                }
                 TrackRow(
                     label = "E${ep.episode?.toString()?.padStart(2, '0') ?: "?"} \u00b7 ${vm.episodeNameFor(ep)}",
                     selected = idx == currentIndex

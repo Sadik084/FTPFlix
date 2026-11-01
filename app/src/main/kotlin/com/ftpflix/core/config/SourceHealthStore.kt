@@ -53,7 +53,7 @@ class SourceHealthStore @Inject constructor(
             val roar = async { ping(roarPingUrl) }
             circle.await() to roar.await()
         }
-        // Both failed likely means no network; retry on the next launch.
+        // Offline: retry on the next launch.
         if (!circleOk && !roarOk) return
         context.sourceHealthDataStore.edit {
             it[checkedOnce] = true
@@ -68,7 +68,7 @@ class SourceHealthStore @Inject constructor(
         }.getOrDefault(false)
     }
 
-    // Ping the same hosts the resolvers use, so local.properties overrides apply.
+    // Ping the configured source hosts.
     private val circlePingUrl = "${CircleFtpApi.API_BASE}/posts?searchTerm=a&order=desc"
     private val roarPingUrl = "${RoarZoneApi.EMBY_BASE}/emby/System/Info/Public"
 

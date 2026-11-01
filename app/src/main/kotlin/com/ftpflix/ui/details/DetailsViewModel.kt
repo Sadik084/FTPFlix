@@ -19,6 +19,7 @@ import com.ftpflix.sources.resolve.SeriesResolver
 import com.ftpflix.sources.resolve.SeriesSeason
 import com.ftpflix.sources.resolve.StreamResolver
 import com.ftpflix.sources.resolve.StreamSource
+import com.ftpflix.sources.resolve.withTmdbSeasons
 import com.ftpflix.ui.navigation.DetailsRoute
 import com.ftpflix.ui.player.PlaybackSession
 import androidx.navigation.toRoute
@@ -322,14 +323,24 @@ class DetailsViewModel @Inject constructor(
                 Log.e("DetailsViewModel", "seriesResolver failed for ${useSource.name}", e)
                 null
             }
-            sessionCatalogs[useSource] = catalog
-            catalog?.let { populateSession(metaTitle, it) }
+            // TMDB defines the season list; sources fill in what they have.
+            val counts = try {
+                metadataRepo.seasonEpisodeCounts(mediaId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                emptyMap()
+            }
+            val merged = (catalog ?: SeriesCatalog(metaTitle, emptyMap())).withTmdbSeasons(counts)
+            val hasContent = merged.seasons.isNotEmpty()
+            sessionCatalogs[useSource] = merged
+            populateSession(metaTitle, merged)
             _ui.update {
-                val firstSeason = catalog?.sortedSeasons()?.firstOrNull()?.number
+                val firstSeason = merged.sortedSeasons().firstOrNull()?.number
                 it.copy(
                     loadingSeries = false,
-                    series = catalog,
-                    seriesError = if (catalog == null) "No episodes found for this source." else null,
+                    series = merged,
+                    seriesError = if (hasContent) null else "No episodes found for this source.",
                     selectedSeason = it.selectedSeason ?: firstSeason,
                 )
             }
@@ -377,10 +388,11 @@ class DetailsViewModel @Inject constructor(
         val flat = playbackSession.episodes
         if (flat.isEmpty()) return
         playbackSession.currentIndex =
-            if (episode == null) -1 else flat.indexOfFirst { it.matchesUrl(episode.url) }
+            if (episode == null) -1
+            else flat.indexOfFirst {
+                it.url == episode.url && it.season == episode.season && it.episode == episode.episode
+            }
     }
-
-    private fun EpisodeStream.matchesUrl(url: String): Boolean = this.url == url
 
     fun selectSeason(season: Int) {
         _ui.update { it.copy(selectedSeason = season) }
@@ -442,6 +454,36 @@ class DetailsViewModel @Inject constructor(
         prepareEpisodePlayback(episode)
         val (_, uiMetadata, _, _, _, _, _, _, _, _, _, _, uiSelectedSource, uiQualityHeight, _, _, _, _) =
             _ui.value
+        // TMDB-only episode: no source url yet, resolve on demand.
+        if (episode.url.isBlank()) {
+            viewModelScope.launch {
+                _ui.update { it.copy(resolvingEpisode = true, episodeError = null) }
+                val imdb = uiMetadata?.imdbId
+                val season = episode.season ?: 1
+                val ep = episode.episode ?: 1
+                val height = uiQualityHeight
+                val primary = uiSelectedSource.takeIf { s -> s.isAddon }
+                val order = listOfNotNull(primary, StreamSource.HD_HUB, StreamSource.HYPER).distinct()
+                val resolved = order.firstNotNullOfOrNull { src ->
+                    try {
+                        if (src == StreamSource.HYPER) hyper.resolveEpisode(imdb, season, ep, height)
+                        else hdhub.resolveEpisode(imdb, season, ep, height)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+                if (resolved != null) {
+                    _ui.update { it.copy(resolvingEpisode = false, pendingPlay = playRequestFor(episode, resolved.url)) }
+                } else {
+                    _ui.update {
+                        it.copy(resolvingEpisode = false, episodeError = "No source has this episode yet.")
+                    }
+                }
+            }
+            return
+        }
         when (uiSelectedSource) {
             StreamSource.AUTO, StreamSource.CIRCLE_FTP, StreamSource.ROAR_ZONE -> {
                 _ui.update { it.copy(pendingPlay = playRequestFor(episode, episode.url), episodeError = null) }

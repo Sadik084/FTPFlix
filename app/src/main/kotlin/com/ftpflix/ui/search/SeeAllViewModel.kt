@@ -106,17 +106,23 @@ class SeeAllViewModel @Inject constructor(
         }
     }
 
-    private suspend fun fetchPage(page: Int): TmdbPaged<TmdbMovie> = when (shelfId) {
-        "trending" -> tmdb.trending("movie", apiKey, page)
-        "trending_tv" -> tmdb.trending("tv", apiKey, page)
-        "popular" -> tmdb.discover("movie", apiKey, sortBy = "popularity.desc", page = page)
-        "popular_tv" -> tmdb.discover("tv", apiKey, sortBy = "popularity.desc", page = page)
-        "new" -> tmdb.discover("movie", apiKey, sortBy = "primary_release_date.desc", page = page)
-        "new_tv" -> tmdb.discover("tv", apiKey, sortBy = "first_air_date.desc", page = page)
-        else -> tmdb.discover(
-            genreKind, apiKey,
-            sortBy = "popularity.desc", withGenres = genreId?.toString(), page = page,
-        )
+    // Released titles only.
+    private suspend fun fetchPage(page: Int): TmdbPaged<TmdbMovie> {
+        val today = LocalDate.now().toString()
+        return when (shelfId) {
+            "trending" -> tmdb.trending("movie", apiKey, page)
+            "trending_tv" -> tmdb.trending("tv", apiKey, page)
+            "popular" -> tmdb.discover("movie", apiKey, sortBy = "popularity.desc", page = page, primaryReleaseDateLte = today)
+            "popular_tv" -> tmdb.discover("tv", apiKey, sortBy = "popularity.desc", page = page, firstAirDateLte = today)
+            "new" -> tmdb.discover("movie", apiKey, sortBy = "primary_release_date.desc", page = page, primaryReleaseDateLte = today)
+            "new_tv" -> tmdb.discover("tv", apiKey, sortBy = "first_air_date.desc", page = page, firstAirDateLte = today)
+            else -> tmdb.discover(
+                genreKind, apiKey,
+                sortBy = "popularity.desc", withGenres = genreId?.toString(), page = page,
+                primaryReleaseDateLte = if (genreKind == "movie") today else null,
+                firstAirDateLte = if (genreKind == "tv") today else null,
+            )
+        }
     }
 
     // Resolve a genre name to its TMDB id and pick the dominant kind.

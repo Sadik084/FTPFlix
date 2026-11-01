@@ -72,7 +72,7 @@ class StreamResolver @Inject constructor(
                 Log.d(TAG, "L1 cache hit for '$title' (${System.currentTimeMillis() - startedAt} ms)")
                 return it
             }
-            // Room cache only for plain AUTO (7-day TTL); pinned/quality picks stay in-memory.
+            // Room cache for plain AUTO only.
             if (source == StreamSource.AUTO && preferredHeight == null) {
                 val entity = resolvedStreamDao.get(baseKey)
                 // RoarZone URLs embed a ~30 min token; skip if the host is disabled.
@@ -111,7 +111,7 @@ class StreamResolver @Inject constructor(
 
         Log.d(TAG, "SUCCESS resolved '$title' [${source.name}]: ${stream.url} (${System.currentTimeMillis() - startedAt} ms)")
         l1ResolveCache.put(cacheKey, stream)
-        // Quality fallbacks are never persisted under the plain AUTO key.
+        // Quality picks are not persisted.
         if (source == StreamSource.AUTO && preferredHeight == null) {
             resolvedStreamDao.upsert(
                 ResolvedStreamEntity(
@@ -178,7 +178,7 @@ class StreamResolver @Inject constructor(
         source: StreamSource,
         preferredHeight: Int?,
     ): ResolvedStream? {
-        // A pinned source disabled in Settings resolves nothing.
+        // Skip sources disabled in Settings.
         if (source != StreamSource.AUTO && source !in sourceSettings.enabledSources.first()) return null
         when (source) {
             StreamSource.AUTO -> {

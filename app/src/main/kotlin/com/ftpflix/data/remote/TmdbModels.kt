@@ -160,6 +160,18 @@ data class TmdbSeasonDetails(
     val episodes: List<TmdbEpisode> = emptyList()
 )
 
+/** Season entry in /tv/{id}; summary only. */
+@Serializable
+data class TmdbSeasonStub(
+    @SerialName("season_number") val seasonNumber: Int = 0,
+    @SerialName("episode_count") val episodeCount: Int = 0,
+)
+
+@Serializable
+data class TmdbTvSeasonList(
+    val seasons: List<TmdbSeasonStub> = emptyList()
+)
+
 @Serializable
 data class TmdbEpisode(
     val id: Long = 0,
