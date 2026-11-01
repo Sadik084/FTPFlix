@@ -477,8 +477,8 @@ class DetailsViewModel @Inject constructor(
                 val season = episode.season ?: 1
                 val ep = episode.episode ?: 1
                 val height = uiQualityHeight
-                val primary = uiSelectedSource.takeIf { s -> s.isAddon }
-                val order = listOfNotNull(primary, StreamSource.HD_HUB, StreamSource.HYPER).distinct()
+                // Walk the user's source order so Settings changes are respected.
+                val order = cachedOrder.filter { it in cachedEnabled && it.isAddon }
                 val resolved = order.firstNotNullOfOrNull { src ->
                     try {
                         if (src == StreamSource.HYPER) hyper.resolveEpisode(imdb, season, ep, height)

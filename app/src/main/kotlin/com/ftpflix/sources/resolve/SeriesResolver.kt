@@ -5,7 +5,6 @@ import androidx.media3.common.util.UnstableApi
 import com.ftpflix.core.config.SourceHealthStore
 import com.ftpflix.core.config.SourceSettingsStore
 import com.ftpflix.domain.parser.TitleNormalizer
-import com.ftpflix.sources.HttpProbe
 import com.ftpflix.sources.circleapi.CircleFtpResolver
 import com.ftpflix.sources.hdhub.HdHubApi
 import com.ftpflix.sources.hdhub.HdHubResolver
@@ -30,7 +29,6 @@ class SeriesResolver @Inject constructor(
     private val roarZone: RoarZoneResolver,
     private val hdhub: HdHubResolver,
     private val hyper: HyperResolver,
-    private val httpProbe: HttpProbe,
     private val sourceHealth: SourceHealthStore,
     private val sourceSettings: SourceSettingsStore,
 ) {
@@ -51,52 +49,24 @@ class SeriesResolver @Inject constructor(
             return it
         }
 
-        // Query enabled browse sources in parallel to cut total catalog wait time.
-        val episodes = ArrayList<EpisodeStream>()
+        // Ask all browse sources at once, then keep the first one that has episodes.
         val order = sourceSettings.sourceOrder.first()
         val enabled = sourceSettings.enabledSources.first()
         val browse = order.filter { it == StreamSource.CIRCLE_FTP || it == StreamSource.ROAR_ZONE }
             .filter { it in enabled }
-        if (browse.isNotEmpty()) {
-            val batches = coroutineScope {
-                browse.map { s ->
-                    async {
-                        when (s) {
-                            StreamSource.CIRCLE_FTP ->
-                                if (sourceHealth.circleFtpEnabled.first()) {
-                                    runCatchingSuspend {
-                                        withTimeoutOrNull(API_TIMEOUT_MS.milliseconds) {
-                                            circleApi.resolveSeries(title, year, null)
-                                        }
-                                    }.getOrNull().orEmpty()
-                                } else emptyList()
-                            else ->
-                                if (sourceHealth.roarZoneEnabled.first()) {
-                                    runCatchingSuspend {
-                                        withTimeoutOrNull(API_TIMEOUT_MS.milliseconds) {
-                                            roarZone.resolveSeries(imdbId, title, seasonCount, null)
-                                        }
-                                    }.getOrNull().orEmpty()
-                                } else emptyList()
-                        }
-                    }
-                }.awaitAll()
-            }
-            // Merge episodes from all sources.
-            batches.forEach { episodes += it }
+        val results = coroutineScope {
+            browse.map { s -> async { s to rawEpisodesFrom(s, title, year, imdbId, seasonCount) } }
+                .awaitAll()
         }
-
-        if (episodes.isEmpty()) {
-            Log.w(TAG, "No episodes found for series '$title' (${System.currentTimeMillis() - startedAt} ms)")
-            return null
-        }
+        val winner = results.firstOrNull { (_, eps) -> eps.isNotEmpty() } ?: return null
+        val episodes = winner.second
 
         val catalog = buildCatalog(title, episodes)
         catalogCache.put(key, catalog)
         val catalogSeasons = catalog.seasons.size
         val catalogStreams = episodes.size
         val elapsedMs = System.currentTimeMillis() - startedAt
-        Log.d(TAG, "Series '$title' catalog: $catalogSeasons seasons, $catalogStreams episode streams ($elapsedMs ms)")
+        Log.d(TAG, "Series '$title' from ${winner.first.name}: $catalogSeasons seasons, $catalogStreams episode streams ($elapsedMs ms)")
         return catalog
     }
 
@@ -215,43 +185,35 @@ class SeriesResolver @Inject constructor(
             pick(candidates, null)?.let { return it }
         }
 
-        // HdHub has no browse endpoint, but it can resolve one episode on demand.
-        if (StreamSource.HD_HUB in enabled && imdbId != null) {
-            val hub = runCatchingSuspend {
-                withTimeoutOrNull(API_TIMEOUT_MS.milliseconds) {
-                    hdhub.resolveEpisode(imdbId, season, episode, null)
-                }
-            }.getOrNull()
-            if (hub != null && hub.url !in exclude && httpProbe.headOk(hub.url)) {
-                return EpisodeStream(
-                    url = hub.url,
-                    host = HdHubApi.HOST_LABEL,
-                    title = "",
-                    season = season,
-                    episode = episode,
-                    sizeDisplay = hub.sizeDisplay,
-                    score = 300,
-                )
+        // Addons resolve one episode on demand; walk them in the user's order.
+        if (imdbId == null) return null
+        for (s in order) {
+            if (!s.isAddon || s !in enabled) continue
+            val episodeResolved = when (s) {
+                StreamSource.HD_HUB ->
+                    runCatchingSuspend {
+                        withTimeoutOrNull(API_TIMEOUT_MS.milliseconds) {
+                            hdhub.resolveEpisode(imdbId, season, episode, null)
+                        }
+                    }.getOrNull()
+                StreamSource.HYPER ->
+                    runCatchingSuspend {
+                        withTimeoutOrNull(API_TIMEOUT_MS.milliseconds) {
+                            hyper.resolveEpisode(imdbId, season, episode, null)
+                        }
+                    }.getOrNull()
+                else -> null
             }
-        }
-
-        // Same for Hyper; direct URLs carry headers applied at play time.
-        if (StreamSource.HYPER in enabled) {
-            val h = runCatchingSuspend {
-                withTimeoutOrNull(API_TIMEOUT_MS.milliseconds) {
-                    hyper.resolveEpisode(imdbId, season, episode, null)
-                }
-            }.getOrNull()
-            if (h != null && h.url !in exclude) {
+            if (episodeResolved != null && episodeResolved.url !in exclude) {
                 return EpisodeStream(
-                    url = h.url,
-                    host = HyperApi.HOST_LABEL,
+                    url = episodeResolved.url,
+                    host = if (s == StreamSource.HYPER) HyperApi.HOST_LABEL else HdHubApi.HOST_LABEL,
                     title = "",
                     season = season,
                     episode = episode,
-                    sizeDisplay = h.sizeDisplay,
+                    sizeDisplay = episodeResolved.sizeDisplay,
                     score = 300,
-                    headers = h.headers,
+                    headers = episodeResolved.headers,
                 )
             }
         }
