@@ -32,6 +32,12 @@ data class TitleCandidate(
     val actors: String?,
 )
 
+// Episode name + air date from TMDB.
+data class EpisodeMeta(
+    val name: String?,
+    val airDate: String?,
+)
+
 // TMDB metadata provider; Room-cached, negatively cached on failure.
 @Singleton
 class MetadataRepository @Inject constructor(
@@ -44,7 +50,7 @@ class MetadataRepository @Inject constructor(
     private val apiKey: String = BuildConfig.TMDB_API_KEY
     private val idPattern = Regex("""^(movie|tv):(\d+)$""")
 
-    private val seasonNamesCache = ConcurrentHashMap<Long, Map<Int, Map<Int, String>>>()
+    private val seasonMetaCache = ConcurrentHashMap<Long, Map<Int, Map<Int, EpisodeMeta>>>()
 
     private val seasonCountsCache = ConcurrentHashMap<String, Map<Int, Int>>()
 
@@ -65,33 +71,33 @@ class MetadataRepository @Inject constructor(
         return counts
     }
 
-    // Real episode names per season, cached in memory; failures fall back to "Episode N".
-    suspend fun seasonEpisodeNames(
+    // Episode names + air dates per season; failures fall back to "Episode N".
+    suspend fun seasonEpisodeMeta(
         tvId: Long,
         seasons: List<Int>,
-    ): Map<Int, Map<Int, String>> {
+    ): Map<Int, Map<Int, EpisodeMeta>> {
         val sortedSeasons = seasons.toSortedSet()
-        seasonNamesCache[tvId]?.let { cached ->
+        seasonMetaCache[tvId]?.let { cached ->
             if (cached.keys.containsAll(sortedSeasons)) return cached
         }
         val fetched = coroutineScope {
             sortedSeasons.map { season ->
-                async(Dispatchers.IO) { season to fetchSeasonNames(tvId, season) }
+                async(Dispatchers.IO) { season to fetchSeasonMeta(tvId, season) }
             }.awaitAll().toMap()
         }
-        val merged = (seasonNamesCache[tvId] ?: emptyMap()) + fetched.filterValues { it.isNotEmpty() }
-        if (merged.isNotEmpty()) seasonNamesCache[tvId] = merged
+        val merged = (seasonMetaCache[tvId] ?: emptyMap()) + fetched.filterValues { it.isNotEmpty() }
+        if (merged.isNotEmpty()) seasonMetaCache[tvId] = merged
         return fetched.filterValues { it.isNotEmpty() }
     }
 
     private fun TmdbEpisode.hasRealName(): Boolean = (episodeNumber > 0) && name.isNotBlank()
 
-    private suspend fun fetchSeasonNames(tvId: Long, season: Int): Map<Int, String> =
+    private suspend fun fetchSeasonMeta(tvId: Long, season: Int): Map<Int, EpisodeMeta> =
         try {
             withTimeout(12.seconds) {
                 tmdb.tvSeasonDetails(tvId, season, apiKey).episodes.asSequence()
                     .filter { it.hasRealName() }
-                    .associateBy(TmdbEpisode::episodeNumber, TmdbEpisode::name)
+                    .associateBy(TmdbEpisode::episodeNumber) { EpisodeMeta(it.name, it.airDate) }
             }
         } catch (e: CancellationException) {
             throw e

@@ -88,6 +88,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
@@ -128,6 +129,8 @@ import com.ftpflix.core.config.FitMode
 import com.ftpflix.core.util.formatBytes
 import com.ftpflix.ui.components.ErrorState
 import com.ftpflix.ui.components.RefreshRate
+import com.ftpflix.ui.components.UpcomingTag
+import com.ftpflix.ui.components.formatAirDate
 import com.ftpflix.ui.theme.Spacing
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -1088,9 +1091,14 @@ private fun EpisodesPanelContent(
                 val idx = episodes.indexOfFirst {
                     it.season == ep.season && it.episode == ep.episode && it.url == ep.url
                 }
+                val dateIso = vm.episodeDateFor(ep)
+                val upcoming = vm.isEpisodeUpcoming(ep)
                 TrackRow(
                     label = "E${ep.episode?.toString()?.padStart(2, '0') ?: "?"} \u00b7 ${vm.episodeNameFor(ep)}",
-                    selected = idx == currentIndex
+                    selected = idx == currentIndex,
+                    sub = formatAirDate(dateIso)?.let { if (upcoming) "Airs $it" else it },
+                    tag = if (upcoming) "Upcoming" else null,
+                    dim = upcoming,
                 ) { onPlayEpisode(idx) }
             }
         }
@@ -1175,8 +1183,15 @@ private fun selectedTrackIndex(
 }
 
 @Composable
-private fun TrackRow(label: String, selected: Boolean, onClick: () -> Unit) {
-    Row(
+private fun TrackRow(
+    label: String,
+    selected: Boolean,
+    sub: String? = null,
+    tag: String? = null,
+    dim: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Column(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
@@ -1186,16 +1201,30 @@ private fun TrackRow(label: String, selected: Boolean, onClick: () -> Unit) {
                 if (selected) GlassBorderActive else Color.White.copy(alpha = 0.10f),
                 RoundedCornerShape(16.dp)
             )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .alpha(if (dim) 0.55f else 1f)
+            .clickable(enabled = !dim, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 12.dp)
     ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyLarge,
-            color = if (selected) Color.White else Color.White.copy(alpha = 0.85f),
-            modifier = Modifier.weight(1f)
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (selected) Color.White else Color.White.copy(alpha = 0.85f),
+                modifier = Modifier.weight(1f)
+            )
+            if (tag != null) {
+                Spacer(Modifier.width(8.dp))
+                UpcomingTag()
+            }
+        }
+        if (sub != null) {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                sub,
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.6f)
+            )
+        }
         if (selected) {
             Icon(
                 Icons.Rounded.Check,

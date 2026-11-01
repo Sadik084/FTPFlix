@@ -44,6 +44,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -62,6 +63,9 @@ import com.ftpflix.sources.resolve.SeriesSeason
 import com.ftpflix.sources.resolve.StreamSource
 import com.ftpflix.ui.components.PlayButton
 import com.ftpflix.ui.components.ScrollRefreshRateHint
+import com.ftpflix.ui.components.UpcomingTag
+import com.ftpflix.ui.components.formatAirDate
+import com.ftpflix.ui.components.isUpcoming
 import com.ftpflix.ui.theme.Spacing
 
 // Playback request: stream URL + display metadata for history rows.
@@ -429,9 +433,12 @@ private fun SeriesSection(
                         val name = ui.episodeNames[episode.season]?.get(episode.episode)
                             ?: "Episode ${episode.episode ?: ""}"
                         val episodeTitle = "$code  •  $name"
+                        val dateIso = ui.episodeDates[episode.season]?.get(episode.episode)
                         EpisodeRow(
                             episode = episode,
                             title = episodeTitle,
+                            airDate = dateIso,
+                            upcoming = isUpcoming(dateIso),
                         ) {
                             onSelectEpisode(episode)
                             onPlayEpisode(episode)
@@ -608,21 +615,44 @@ private fun episodeCode(episode: EpisodeStream): String =
         "E" + (episode.episode ?: 0).toString().padStart(2, '0')
 
 @Composable
-private fun EpisodeRow(episode: EpisodeStream, title: String, onClick: () -> Unit) {
+private fun EpisodeRow(
+    episode: EpisodeStream,
+    title: String,
+    airDate: String?,
+    upcoming: Boolean,
+    onClick: () -> Unit,
+) {
     Column(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+            .alpha(if (upcoming) 0.55f else 1f)
             .clickable(onClick = onClick)
             .padding(horizontal = Spacing.md, vertical = Spacing.sm)
     ) {
-        Text(
-            title,
-            style = MaterialTheme.typography.bodyLarge,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (upcoming) {
+                Spacer(Modifier.width(Spacing.sm))
+                UpcomingTag()
+            }
+        }
+        val date = formatAirDate(airDate)
+        if (date != null) {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                if (upcoming) "Airs $date" else date,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         // File size only - the host label is an internal detail.
         if (episode.sizeDisplay.isNotBlank()) {
             Spacer(Modifier.height(2.dp))

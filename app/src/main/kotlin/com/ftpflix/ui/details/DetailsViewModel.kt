@@ -20,6 +20,7 @@ import com.ftpflix.sources.resolve.SeriesSeason
 import com.ftpflix.sources.resolve.StreamResolver
 import com.ftpflix.sources.resolve.StreamSource
 import com.ftpflix.sources.resolve.withTmdbSeasons
+import com.ftpflix.ui.components.isUpcoming
 import com.ftpflix.ui.navigation.DetailsRoute
 import com.ftpflix.ui.player.PlaybackSession
 import androidx.navigation.toRoute
@@ -57,6 +58,8 @@ data class DetailsUi(
     val selectedSeason: Int? = null,
     /** season -> (episodeNumber -> TMDB name) for real episode titles. */
     val episodeNames: Map<Int, Map<Int, String>> = emptyMap(),
+    /** season -> (episodeNumber -> ISO air date). */
+    val episodeDates: Map<Int, Map<Int, String>> = emptyMap(),
     /** Pinned stream source; AUTO uses the user-configured order from Settings. */
     val selectedSource: StreamSource = StreamSource.AUTO,
     /** Pinned addon quality tier (null = best available). Only consulted for addon sources. */
@@ -371,16 +374,23 @@ class DetailsViewModel @Inject constructor(
         )
         val tmdbId = mediaId.substringAfter("tv:", "").toLongOrNull()
         if ((tmdbId == null) || flat.isEmpty()) return
-        val names = try {
-            metadataRepo.seasonEpisodeNames(tmdbId, catalog.sortedSeasons().map(SeriesSeason::number))
+        val meta = try {
+            metadataRepo.seasonEpisodeMeta(tmdbId, catalog.sortedSeasons().map(SeriesSeason::number))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.e("DetailsViewModel", "seasonEpisodeNames failed", e)
+            Log.e("DetailsViewModel", "seasonEpisodeMeta failed", e)
             emptyMap()
         }
+        val names = meta.mapValues { (_, eps) ->
+            eps.mapNotNull { (num, m) -> m.name?.let { num to it } }.toMap()
+        }
+        val dates = meta.mapValues { (_, eps) ->
+            eps.mapNotNull { (num, m) -> m.airDate?.let { num to it } }.toMap()
+        }
         playbackSession.episodeNames = names
-        _ui.update { it.copy(episodeNames = names) }
+        playbackSession.episodeDates = dates
+        _ui.update { it.copy(episodeNames = names, episodeDates = dates) }
     }
 
     /** Called right before navigating to the player so Next-up knows the index. */
@@ -451,8 +461,13 @@ class DetailsViewModel @Inject constructor(
 
     // Series episode tap: catalog URL for AUTO/Circle/Roar, on-demand resolve for HdHub.
     fun requestEpisodePlayback(episode: EpisodeStream) {
+        val airDate = _ui.value.episodeDates[episode.season]?.get(episode.episode)
+        if (isUpcoming(airDate)) {
+            _ui.update { it.copy(episodeError = "This episode hasn't aired yet.") }
+            return
+        }
         prepareEpisodePlayback(episode)
-        val (_, uiMetadata, _, _, _, _, _, _, _, _, _, _, uiSelectedSource, uiQualityHeight, _, _, _, _) =
+        val (_, uiMetadata, _, _, _, _, _, _, _, _, _, _, _, uiSelectedSource, uiQualityHeight, _, _, _, _) =
             _ui.value
         // TMDB-only episode: no source url yet, resolve on demand.
         if (episode.url.isBlank()) {

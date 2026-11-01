@@ -16,6 +16,9 @@ class PlaybackSession @Inject constructor() {
     /** season -> (episodeNumber -> TMDB episode name) */
     var episodeNames: Map<Int, Map<Int, String>> = emptyMap()
 
+    /** season -> (episodeNumber -> ISO air date) */
+    var episodeDates: Map<Int, Map<Int, String>> = emptyMap()
+
     var currentIndex: Int = -1
 
     val hasEpisodes: Boolean get() = episodes.isNotEmpty()
@@ -33,6 +36,7 @@ class PlaybackSession @Inject constructor() {
         posterUrl: String?,
         episodes: List<EpisodeStream>,
         episodeNames: Map<Int, Map<Int, String>>,
+        episodeDates: Map<Int, Map<Int, String>> = emptyMap(),
         currentIndex: Int
     ) {
         this.seriesTitle = seriesTitle
@@ -40,6 +44,7 @@ class PlaybackSession @Inject constructor() {
         this.posterUrl = posterUrl
         this.episodes = episodes
         this.episodeNames = episodeNames
+        this.episodeDates = episodeDates
         this.currentIndex = currentIndex
     }
 
@@ -49,6 +54,7 @@ class PlaybackSession @Inject constructor() {
         posterUrl = null
         episodes = emptyList()
         episodeNames = emptyMap()
+        episodeDates = emptyMap()
         currentIndex = -1
     }
 }

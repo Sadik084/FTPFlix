@@ -32,6 +32,7 @@ import com.ftpflix.sources.resolve.EpisodeStream
 import com.ftpflix.sources.resolve.SeriesResolver
 import com.ftpflix.sources.resolve.StreamResolver
 import com.ftpflix.sources.resolve.withTmdbSeasons
+import com.ftpflix.ui.components.isUpcoming
 import kotlinx.coroutines.CancellationException
 import com.ftpflix.ui.navigation.PlayerRoute
 import androidx.navigation.toRoute
@@ -452,21 +453,28 @@ class PlayerViewModel @Inject constructor(
                 .takeIf { it >= 0 }
             ?: flat.indexOfFirst { it.season == 1 } // best effort
         val tmdbId = contentKey.removePrefix("tmdb:").removePrefix("tv:").toLongOrNull()
-        val names = if (tmdbId != null) {
+        val epMeta = if (tmdbId != null) {
             try {
-                metadataRepo.seasonEpisodeNames(tmdbId, merged.sortedSeasons().map { it.number })
+                metadataRepo.seasonEpisodeMeta(tmdbId, merged.sortedSeasons().map { it.number })
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
                 emptyMap()
             }
         } else emptyMap()
+        val names = epMeta.mapValues { (_, eps) ->
+            eps.mapNotNull { (num, m) -> m.name?.let { num to it } }.toMap()
+        }
+        val dates = epMeta.mapValues { (_, eps) ->
+            eps.mapNotNull { (num, m) -> m.airDate?.let { num to it } }.toMap()
+        }
         playbackSession.set(
             seriesTitle = title,
             contentKey = contentKey,
             posterUrl = displayPosterUrl,
             episodes = flat,
             episodeNames = names,
+            episodeDates = dates,
             currentIndex = index.coerceAtLeast(0)
         )
         _episodeIndex.value = index.coerceAtLeast(0)
@@ -540,6 +548,10 @@ class PlayerViewModel @Inject constructor(
         val episodes = playbackSession.episodes
         if (index !in episodes.indices) return
         val ep = episodes[index]
+        if (isEpisodeUpcoming(ep)) {
+            _ui.update { it.copy(notice = "This episode hasn't aired yet.", buffering = false) }
+            return
+        }
         // TMDB-only entry: resolve a stream first.
         if (ep.url.isBlank()) {
             resolveAndPlayEpisode(index)
@@ -612,6 +624,11 @@ class PlayerViewModel @Inject constructor(
     fun episodeNameFor(ep: EpisodeStream): String =
         playbackSession.nameFor(ep.season, ep.episode)
             ?: "Episode ${ep.episode ?: ""}"
+
+    fun episodeDateFor(ep: EpisodeStream): String? =
+        playbackSession.episodeDates[ep.season]?.get(ep.episode)
+
+    fun isEpisodeUpcoming(ep: EpisodeStream): Boolean = isUpcoming(episodeDateFor(ep))
 
     fun nextEpisodeLabel(): String? {
         val next = playbackSession.next() ?: return null
