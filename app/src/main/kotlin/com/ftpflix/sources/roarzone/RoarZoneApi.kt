@@ -70,6 +70,9 @@ class RoarZoneApi @Inject constructor(
     private var cachedToken: String? = null
     private var tokenExpiry = 0L
 
+    // One stable id per process; Emby counts new ids as new devices.
+    private val deviceId = "ftpflix-${UUID.randomUUID()}"
+
     suspend fun currentToken(force: Boolean = false): String? = tokenMutex.withLock {
         if (!force) {
             cachedToken?.takeIf { System.currentTimeMillis() < tokenExpiry }?.let { return it }
@@ -151,7 +154,7 @@ class RoarZoneApi @Inject constructor(
 
     private fun authHeader(): String =
         "MediaBrowser Client=\"FTPFlix\", Device=\"FTPFlix\", " +
-            "DeviceId=\"ftpflix-${UUID.randomUUID()}\", Version=\"1.0.0\""
+            "DeviceId=\"$deviceId\", Version=\"1.0.0\""
 
     companion object {
         /** Overridable via ROARZONE_BASE_URL in local.properties. */

@@ -1,6 +1,7 @@
 package com.ftpflix.sources.resolve
 
 import android.util.Log
+import androidx.media3.common.util.UnstableApi
 import com.ftpflix.core.config.SourceHealthStore
 import com.ftpflix.core.config.SourceSettingsStore
 import com.ftpflix.domain.parser.TitleNormalizer
@@ -9,7 +10,12 @@ import com.ftpflix.sources.circleapi.CircleFtpResolver
 import com.ftpflix.sources.hdhub.HdHubApi
 import com.ftpflix.sources.hdhub.HdHubResolver
 import com.ftpflix.sources.roarzone.RoarZoneResolver
+import com.ftpflix.sources.hyper.HyperApi
+import com.ftpflix.sources.hyper.HyperResolver
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
@@ -17,11 +23,13 @@ import javax.inject.Singleton
 import kotlin.time.Duration.Companion.milliseconds
 
 // TV series resolution, same user-ordered cascade as movies.
+@UnstableApi
 @Singleton
 class SeriesResolver @Inject constructor(
     private val circleApi: CircleFtpResolver,
     private val roarZone: RoarZoneResolver,
     private val hdhub: HdHubResolver,
+    private val hyper: HyperResolver,
     private val httpProbe: HttpProbe,
     private val sourceHealth: SourceHealthStore,
     private val sourceSettings: SourceSettingsStore,
@@ -43,35 +51,43 @@ class SeriesResolver @Inject constructor(
             return it
         }
 
-        // Sequential, user-ordered (Settings): enabled sources tried in order until one yields episodes.
+        // Query enabled browse sources in parallel to cut total catalog wait time.
         val episodes = ArrayList<EpisodeStream>()
         val order = sourceSettings.sourceOrder.first()
         val enabled = sourceSettings.enabledSources.first()
-        for (s in order) {
-            if (s !in enabled) continue
-            when (s) {
-                StreamSource.CIRCLE_FTP -> {
-                    if (sourceHealth.circleFtpEnabled.first()) {
-                        episodes += runCatchingSuspend {
-                            withTimeoutOrNull(API_TIMEOUT_MS.milliseconds) {
-                                circleApi.resolveSeries(title, year, null)
-                            }
-                        }.getOrNull().orEmpty()
+        val browse = order.filter { it == StreamSource.CIRCLE_FTP || it == StreamSource.ROAR_ZONE }
+            .filter { it in enabled }
+        if (browse.isNotEmpty()) {
+            val batches = coroutineScope {
+                browse.map { s ->
+                    async {
+                        when (s) {
+                            StreamSource.CIRCLE_FTP ->
+                                if (sourceHealth.circleFtpEnabled.first()) {
+                                    runCatchingSuspend {
+                                        withTimeoutOrNull(API_TIMEOUT_MS.milliseconds) {
+                                            circleApi.resolveSeries(title, year, null)
+                                        }
+                                    }.getOrNull().orEmpty()
+                                } else emptyList()
+                            else ->
+                                if (sourceHealth.roarZoneEnabled.first()) {
+                                    runCatchingSuspend {
+                                        withTimeoutOrNull(API_TIMEOUT_MS.milliseconds) {
+                                            roarZone.resolveSeries(imdbId, title, seasonCount, null)
+                                        }
+                                    }.getOrNull().orEmpty()
+                                } else emptyList()
+                        }
                     }
-                }
-                StreamSource.ROAR_ZONE -> {
-                    if (sourceHealth.roarZoneEnabled.first()) {
-                        episodes += runCatchingSuspend {
-                            withTimeoutOrNull(API_TIMEOUT_MS.milliseconds) {
-                                roarZone.resolveSeries(imdbId, title, seasonCount, null)
-                            }
-                        }.getOrNull().orEmpty()
-                    }
-                }
-                // HdHub has no browse endpoint; series resolve per-episode at play time.
-                StreamSource.HD_HUB, StreamSource.AUTO -> {}
+                }.awaitAll()
             }
-            if (episodes.isNotEmpty()) break
+            for (batch in batches) {
+                if (batch.isNotEmpty()) {
+                    episodes += batch
+                    break
+                }
+            }
         }
 
         if (episodes.isEmpty()) {
@@ -219,6 +235,27 @@ class SeriesResolver @Inject constructor(
                     episode = episode,
                     sizeDisplay = hub.sizeDisplay,
                     score = 300,
+                )
+            }
+        }
+
+        // Same for Hyper; direct URLs carry headers applied at play time.
+        if (StreamSource.HYPER in enabled) {
+            val h = runCatchingSuspend {
+                withTimeoutOrNull(API_TIMEOUT_MS.milliseconds) {
+                    hyper.resolveEpisode(imdbId, season, episode, null)
+                }
+            }.getOrNull()
+            if (h != null && h.url !in exclude) {
+                return EpisodeStream(
+                    url = h.url,
+                    host = HyperApi.HOST_LABEL,
+                    title = "",
+                    season = season,
+                    episode = episode,
+                    sizeDisplay = h.sizeDisplay,
+                    score = 300,
+                    headers = h.headers,
                 )
             }
         }

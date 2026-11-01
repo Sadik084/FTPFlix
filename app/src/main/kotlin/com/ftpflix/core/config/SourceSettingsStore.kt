@@ -24,13 +24,15 @@ class SourceSettingsStore @Inject constructor(
     private val keyEnabledCircle = booleanPreferencesKey("enabled_circle")
     private val keyEnabledRoar = booleanPreferencesKey("enabled_roar")
     private val keyEnabledHdhub = booleanPreferencesKey("enabled_hdhub")
+    private val keyEnabledHyper = booleanPreferencesKey("enabled_hyper")
 
     val sourceOrder: Flow<List<StreamSource>> = context.sourceSettingsDataStore.data.map { prefs ->
-        prefs[keyOrder]
+        val stored = prefs[keyOrder]
             ?.split(',')
             ?.mapNotNull { runCatching { StreamSource.valueOf(it.trim()) }.getOrNull() }
-            ?.takeIf { it.isNotEmpty() }
-            ?: DEFAULT_ORDER
+            .orEmpty()
+        // Append sources added after the order was persisted (e.g. Hyper).
+        (stored + DEFAULT_ORDER.filter { it !in stored }).ifEmpty { DEFAULT_ORDER }
     }
 
     val enabledSources: Flow<Set<StreamSource>> = context.sourceSettingsDataStore.data.map { prefs ->
@@ -38,6 +40,7 @@ class SourceSettingsStore @Inject constructor(
             if (prefs[keyEnabledCircle] != false) add(StreamSource.CIRCLE_FTP)
             if (prefs[keyEnabledRoar] != false) add(StreamSource.ROAR_ZONE)
             if (prefs[keyEnabledHdhub] != false) add(StreamSource.HD_HUB)
+            if (prefs[keyEnabledHyper] != false) add(StreamSource.HYPER)
         }
     }
 
@@ -56,6 +59,7 @@ class SourceSettingsStore @Inject constructor(
             StreamSource.CIRCLE_FTP -> keyEnabledCircle
             StreamSource.ROAR_ZONE -> keyEnabledRoar
             StreamSource.HD_HUB -> keyEnabledHdhub
+            StreamSource.HYPER -> keyEnabledHyper
             StreamSource.AUTO -> return
         }
         context.sourceSettingsDataStore.edit { prefs -> prefs[key] = enabled }
@@ -65,7 +69,8 @@ class SourceSettingsStore @Inject constructor(
         val DEFAULT_ORDER = listOf(
             StreamSource.CIRCLE_FTP,
             StreamSource.ROAR_ZONE,
-            StreamSource.HD_HUB
+            StreamSource.HD_HUB,
+            StreamSource.HYPER
         )
     }
 }

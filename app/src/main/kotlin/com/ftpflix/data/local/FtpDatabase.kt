@@ -14,7 +14,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ResolvedStreamEntity::class,
         FeedItemEntity::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = false
 )
 abstract class FtpDatabase : RoomDatabase() {
@@ -73,6 +73,13 @@ abstract class FtpDatabase : RoomDatabase() {
         val MIGRATION_8_9 = object : Migration(8, 9) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE metadata_details ADD COLUMN ageRating TEXT")
+            }
+        }
+
+        /** resolved_streams.headers: stream request headers (e.g. Referer). */
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE resolved_streams ADD COLUMN headers TEXT")
             }
         }
     }

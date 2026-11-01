@@ -17,20 +17,25 @@ class HttpProbe @Inject constructor(okHttp: OkHttpClient) {
         .readTimeout(2, TimeUnit.SECONDS)
         .build()
 
-    suspend fun headOk(url: String): Boolean = withContext(Dispatchers.IO) {
-        runCatching {
-            client.newCall(Request.Builder().url(url).head().build()).execute()
-                .use { it.isSuccessful }
-        }.getOrDefault(defaultValue = false)
-    }
+    suspend fun headOk(url: String, headers: Map<String, String> = emptyMap()): Boolean =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val req = Request.Builder().url(url).head()
+                headers.forEach { (k, v) -> req.header(k, v) }
+                client.newCall(req.build()).execute().use { it.isSuccessful }
+            }.getOrDefault(defaultValue = false)
+        }
 
     /** Content-Length of a direct media URL, or null when unavailable. */
-    suspend fun contentLength(url: String): Long? = withContext(Dispatchers.IO) {
-        runCatching {
-            client.newCall(Request.Builder().url(url).head().build()).execute().use { resp ->
-                if (!resp.isSuccessful) return@use null
-                resp.header("content-length")?.toLongOrNull()?.takeIf { it > 0 }
-            }
-        }.getOrNull()
-    }
+    suspend fun contentLength(url: String, headers: Map<String, String> = emptyMap()): Long? =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val req = Request.Builder().url(url).head()
+                headers.forEach { (k, v) -> req.header(k, v) }
+                client.newCall(req.build()).execute().use { resp ->
+                    if (!resp.isSuccessful) return@use null
+                    resp.header("content-length")?.toLongOrNull()?.takeIf { it > 0 }
+                }
+            }.getOrNull()
+        }
 }

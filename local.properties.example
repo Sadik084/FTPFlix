@@ -7,6 +7,9 @@ TMDB_API_KEY=your_tmdb_api_key
 # HdHub addon URL.
 HDHUB_ADDON_URL=https://your-hdhub-addon-url
 
+# Hyper addon base URL (Stremio addon).
+HYPER_ADDON_URL=https://hyper.stravo.site/local
+
 # GitHub release source for in-app OTA updates.
 GITHUB_OWNER=your-github-username
 GITHUB_REPO=ftpflix

@@ -12,6 +12,14 @@
     kotlinx.serialization.KSerializer serializer(...);
 }
 
+-keep,includedescriptorclasses class com.ftpflix.sources.hyper.**$$serializer { *; }
+-keepclassmembers class com.ftpflix.sources.hyper.** {
+    *** Companion;
+}
+-keepclasseswithmembers class com.ftpflix.sources.hyper.** {
+    kotlinx.serialization.KSerializer serializer(...);
+}
+
 # Retrofit
 -keepattributes Signature, Exceptions, InnerClasses, EnclosingMethod
 -keep,allowobfuscation,allowshrinking interface retrofit2.Call

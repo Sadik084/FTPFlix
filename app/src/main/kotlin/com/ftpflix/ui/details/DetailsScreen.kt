@@ -73,6 +73,8 @@ data class PlayRequest(
     val episodeLabel: String? = null,
     /** Release year; keeps stream re-resolution inside the right movie. */
     val year: Int? = null,
+    /** Extra HTTP request headers for the stream (e.g. Referer). */
+    val headers: Map<String, String> = emptyMap(),
 )
 
 @Composable
@@ -187,11 +189,11 @@ fun DetailsScreen(
                         ui = ui,
                         onSelect = vm::selectSource,
                     )
-                    if (ui.selectedSource == StreamSource.HD_HUB) {
+                    if (ui.selectedSource.isAddon) {
                         Spacer(Modifier.height(Spacing.sm))
-                        HdHubQualityRow(
+                        QualityRow(
                             ui = ui,
-                            onSelect = vm::selectHdHubQuality,
+                            onSelect = vm::selectQuality,
                         )
                     }
                     Spacer(Modifier.height(Spacing.lg))
@@ -295,6 +297,7 @@ private fun MovieStreamSection(
                             title = metadata?.title ?: stream.host,
                             posterUrl = metadata?.posterUrl,
                             year = metadata?.year,
+                            headers = stream.headers,
                         ),
                     )
                 },
@@ -520,9 +523,9 @@ private fun SourceChip(
     }
 }
 
-/** Quality tiers built from what the HdHub addon currently offers; "Auto" always present. */
+/** Quality tiers built from what the pinned addon currently offers; "Auto" always present. */
 @Composable
-private fun HdHubQualityRow(ui: DetailsUi, onSelect: (Int?) -> Unit) {
+private fun QualityRow(ui: DetailsUi, onSelect: (Int?) -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -536,21 +539,21 @@ private fun HdHubQualityRow(ui: DetailsUi, onSelect: (Int?) -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.width(Spacing.xs))
-        if (ui.loadingHdhubQualities && ui.hdhubQualities.isEmpty()) {
+        if (ui.loadingQualities && ui.qualityTiers.isEmpty()) {
             CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp)
             Spacer(Modifier.width(Spacing.xs))
         }
         SelectableChip(
             label = "Auto",
-            selected = ui.hdhubHeight == null,
+            selected = ui.qualityHeight == null,
         ) { onSelect(null) }
-        ui.hdhubQualities.forEach { height ->
+        ui.qualityTiers.forEach { height ->
             SelectableChip(
                 label = qualityLabel(height),
-                selected = ui.hdhubHeight == height,
+                selected = ui.qualityHeight == height,
             ) { onSelect(height) }
         }
-        if (!ui.loadingHdhubQualities && ui.hdhubQualities.isEmpty()) {
+        if (!ui.loadingQualities && ui.qualityTiers.isEmpty()) {
             Text(
                 "Best available",
                 style = MaterialTheme.typography.labelSmall,

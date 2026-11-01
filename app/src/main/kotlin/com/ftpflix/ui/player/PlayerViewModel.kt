@@ -14,9 +14,12 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.ftpflix.core.config.FitMode
 import com.ftpflix.core.config.PlaybackSettings
 import com.ftpflix.core.util.StreamMeta
@@ -45,6 +48,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import javax.inject.Inject
@@ -119,7 +123,18 @@ class PlayerViewModel @Inject constructor(
         setEnableDecoderFallback(true)
     }
 
+    // Long read timeout: large direct streams can delay before the first byte.
+    private val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+        .setConnectTimeoutMs(15_000)
+        .setReadTimeoutMs(READ_TIMEOUT_MS)
+        .setAllowCrossProtocolRedirects(true)
+
+    private val dataSourceFactory = DefaultDataSource.Factory(ctx, httpDataSourceFactory)
+
+    private val json = Json { ignoreUnknownKeys = true }
+
     val player: ExoPlayer = ExoPlayer.Builder(ctx, renderersFactory)
+        .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
         .setLoadControl(
             DefaultLoadControl.Builder()
                 .setBufferDurationsMs(50_000, 250_000, 2_500, 5_000)
@@ -177,6 +192,7 @@ class PlayerViewModel @Inject constructor(
     private var displayPosterUrl: String? = null
     private var displayEpisodeLabel: String = ""
     private var displayYear: Int? = null
+    private var streamHeaders: Map<String, String> = emptyMap()
     private var retried = false
     private val rejectedUrls = mutableSetOf<String>()
     private var altAttempts = 0
@@ -214,6 +230,8 @@ class PlayerViewModel @Inject constructor(
         displayPosterUrl = route?.posterUrl?.takeIf { it.isNotBlank() }
         displayEpisodeLabel = route?.episodeLabel.orEmpty()
         displayYear = route?.year?.takeIf { it > 0 }
+        streamHeaders = runCatching { json.decodeFromString<Map<String, String>>(route?.headers.orEmpty()) }
+            .getOrDefault(emptyMap())
         _episodeIndex.value = playbackSession.currentIndex
         _ui.update {
             it.copy(title = initialTitle())
@@ -287,7 +305,7 @@ class PlayerViewModel @Inject constructor(
                     val pos = bestKnownPositionMs()
                     viewModelScope.launch {
                         // Probe the current URL first; transient errors re-prepare the same item, never re-resolve.
-                        val urlStillAlive = mediaKey?.let { httpProbe.headOk(it) } == true
+                        val urlStillAlive = mediaKey?.let { httpProbe.headOk(it, streamHeaders) } == true
                         if (urlStillAlive) {
                             retrySameItem(pos)
                             return@launch
@@ -314,6 +332,9 @@ class PlayerViewModel @Inject constructor(
                                 retried = false
                                 playUrl(fresh.url, pos)
                             }
+                            // Same URL came back: still dead, so hop to another source.
+                            fresh != null && fresh.url == mediaKey ->
+                                tryAlternateSource(pos, notice = SOURCE_RETRY_NOTICE)
                             fresh != null -> retrySameItem(pos)
                             // Last resort: re-prepare the current item at the last known position.
                             pos > 0 -> retrySameItem(pos)
@@ -344,6 +365,8 @@ class PlayerViewModel @Inject constructor(
                 if (show != _showNextUp.value) _showNextUp.value = show
             }
         }
+
+
     }
 
     private fun open(key: String) {
@@ -361,6 +384,7 @@ class PlayerViewModel @Inject constructor(
         rejectedUrls.clear()
         altAttempts = 0
         altInFlight = false
+        applyRequestHeaders()
         _ui.update { it.copy(
             serverHost = url.host?.takeIf { h -> h.isNotBlank() },
             fileSizeBytes = 0L
@@ -368,7 +392,7 @@ class PlayerViewModel @Inject constructor(
         player.setMediaItem(MediaItem.fromUri(url))
         viewModelScope.launch {
             // Best-effort file size for the Info panel (never blocks playback).
-            val size = runCatching { httpProbe.contentLength(key) }.getOrNull()
+            val size = runCatching { httpProbe.contentLength(key, streamHeaders) }.getOrNull()
             _ui.update { it.copy(fileSizeBytes = size ?: 0L) }
             val content = contentKey.ifBlank { key }
             history.get(content)?.takeIf { it.streamUrl == key }?.let { saved ->
@@ -501,9 +525,12 @@ class PlayerViewModel @Inject constructor(
             it.copy(title = currentEpisodeLabel(), error = null, notice = null, buffering = true)
         }
         resetVideoSize()
-        player.setMediaItem(MediaItem.fromUri(ep.url.toUri()))
-        player.prepare()
-        player.playWhenReady = true
+        viewModelScope.launch {
+            applyRequestHeaders(ep.headers)
+            player.setMediaItem(MediaItem.fromUri(ep.url.toUri()))
+            player.prepare()
+            player.playWhenReady = true
+        }
     }
 
     fun playNextEpisode() {
@@ -723,6 +750,7 @@ class PlayerViewModel @Inject constructor(
     private fun playUrl(url: String, positionMs: Long) {
         resetVideoSize()
         lastKnownPositionMs = positionMs
+        applyRequestHeaders()
         player.setMediaItem(MediaItem.fromUri(url.toUri()))
         player.seekTo(positionMs)
         player.prepare()
@@ -741,7 +769,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     /** Tries another source/quality after a decoder failure (e.g. HEVC 10-bit on unsupported hardware). */
-    private fun tryAlternateSource(pos: Long) {
+    private fun tryAlternateSource(pos: Long, notice: String = DECODER_ALT_NOTICE) {
         val failed = mediaKey ?: return
         if (altInFlight) return
         altInFlight = true
@@ -756,7 +784,7 @@ class PlayerViewModel @Inject constructor(
         _ui.update {
             it.copy(
                 buffering = true,
-                notice = "Your device can't decode this video format. Trying an alternate source..."
+                notice = notice,
             )
         }
         viewModelScope.launch {
@@ -818,6 +846,11 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    // Apply the current stream's extra HTTP request headers to the data source.
+    private fun applyRequestHeaders(headers: Map<String, String> = streamHeaders) {
+        httpDataSourceFactory.setDefaultRequestProperties(headers)
+    }
+
     override fun onCleared() {
         // Player is still valid on the main thread here; capture then persist.
         saveProgressNow()
@@ -826,6 +859,7 @@ class PlayerViewModel @Inject constructor(
 
     private companion object {
         const val NEXT_UP_WINDOW_MS = 75_000L
+        const val READ_TIMEOUT_MS = 60_000
         const val MAX_BITRATE_SAMPLES = 120
         private const val TAG = "PlayerViewModel"
         /** Decoder-related PlaybackException codes (video/audio codec failures, not network). */
@@ -833,5 +867,9 @@ class PlayerViewModel @Inject constructor(
             PlaybackException.ERROR_CODE_DECODER_INIT_FAILED..
                 PlaybackException.ERROR_CODE_DECODING_RESOURCES_RECLAIMED
         private const val MAX_ALT_ATTEMPTS = 3
+        private const val DECODER_ALT_NOTICE =
+            "Your device can't decode this video format. Trying an alternate source..."
+        private const val SOURCE_RETRY_NOTICE =
+            "This stream is not responding. Trying an alternate source..."
     }
 }

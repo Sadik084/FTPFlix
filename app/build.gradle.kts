@@ -49,6 +49,10 @@ android {
             "String", "ROARZONE_BASE_URL",
             "\"${configValue("ROARZONE_BASE_URL", "https://play.roarzone.net")}\""
         )
+        buildConfigField(
+            "String", "HYPER_ADDON_URL",
+            "\"${configValue("HYPER_ADDON_URL", "https://hyper.stravo.site/local")}\""
+        )
     }
 
     signingConfigs {
@@ -144,6 +148,8 @@ dependencies {
 
     implementation(libs.media3.common)
     implementation(libs.media3.exoplayer)
+    implementation(libs.media3.exoplayer.hls)
+    implementation(libs.media3.exoplayer.dash)
     implementation(libs.media3.ui.compose)
 
     // Software AC-3 / E-AC-3 / DTS / TrueHD decoder extension. ExoPlayer has no

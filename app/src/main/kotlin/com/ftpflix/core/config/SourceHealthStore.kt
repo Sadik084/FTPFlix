@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.preferencesDataStore
+import com.ftpflix.sources.circleapi.CircleFtpApi
+import com.ftpflix.sources.roarzone.RoarZoneApi
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -47,10 +49,12 @@ class SourceHealthStore @Inject constructor(
     suspend fun ensureChecked() {
         if (context.sourceHealthDataStore.data.first()[checkedOnce] == true) return
         val (circleOk, roarOk) = coroutineScope {
-            val circle = async { ping(CIRCLE_PING_URL) }
-            val roar = async { ping(ROARZONE_PING_URL) }
+            val circle = async { ping(circlePingUrl) }
+            val roar = async { ping(roarPingUrl) }
             circle.await() to roar.await()
         }
+        // Both failed likely means no network; retry on the next launch.
+        if (!circleOk && !roarOk) return
         context.sourceHealthDataStore.edit {
             it[checkedOnce] = true
             it[keyCircle] = circleOk
@@ -64,10 +68,11 @@ class SourceHealthStore @Inject constructor(
         }.getOrDefault(false)
     }
 
+    // Ping the same hosts the resolvers use, so local.properties overrides apply.
+    private val circlePingUrl = "${CircleFtpApi.API_BASE}/posts?searchTerm=a&order=desc"
+    private val roarPingUrl = "${RoarZoneApi.EMBY_BASE}/emby/System/Info/Public"
+
     private companion object {
-        /** Cheap authenticated-free GET per source: the CircleFTP posts list and Emby's public system info. */
-        const val CIRCLE_PING_URL = "http://new.circleftp.net:5000/api/posts?searchTerm=a&order=desc"
-        const val ROARZONE_PING_URL = "https://play.roarzone.net/emby/System/Info/Public"
         const val PING_TIMEOUT_MS = 8_000L
     }
 }

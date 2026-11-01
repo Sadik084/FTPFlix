@@ -103,7 +103,8 @@ class HdHubResolver @Inject constructor(
     private fun parseUsable(s: HdHubStream): Usable? {
         val url = s.url?.trim().orEmpty()
         if (url.isBlank()) return null
-        if (url.contains(HUB_GATEWAY)) return null
+        if (BLOCKED_HOSTS.any { url.contains(it) }) return null
+        if (ARCHIVE_EXT.containsMatchIn(url)) return null
 
         val blob = "${s.name} ${s.description}"
         if (blob.contains("Download Only", ignoreCase = true)) return null
@@ -120,7 +121,9 @@ class HdHubResolver @Inject constructor(
     companion object {
         private const val TAG = "HdHubResolver"
         private const val FETCH_TIMEOUT_MS = 12L
-        private const val HUB_GATEWAY = "hubcloud.ist"
+        // Hosts that serve download pages/bundles rather than streamable video.
+        private val BLOCKED_HOSTS = listOf("hubcloud.ist", "pixeldrain.dev")
+        private val ARCHIVE_EXT = Regex("""(?i)\.(zip|rar|7z|tar|gz|bz2|xz)$""")
         /** "Auto" quality targets 1080p (falls to the nearest tier when absent). */
         private const val DEFAULT_AUTO_HEIGHT = 1080
     }

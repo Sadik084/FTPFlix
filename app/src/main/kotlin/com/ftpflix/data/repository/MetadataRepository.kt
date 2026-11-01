@@ -167,16 +167,25 @@ class MetadataRepository @Inject constructor(
         return rating
     }
 
+    private val searchCache = ConcurrentHashMap<String, List<TitleCandidate>>()
+
     suspend fun candidatesFor(parsed: ParsedName): List<TitleCandidate> {
-        val out = mutableListOf<TitleCandidate>()
-        runCatching {
-            out += tmdb.searchMovie(apiKey, parsed.title, parsed.year).results.map { it.toCandidate("movie") }
+        val cacheKey = parsed.title.trim().lowercase() + (parsed.year?.let { "|$it" } ?: "")
+        searchCache[cacheKey]?.let { return it }
+        val (movies, tv) = coroutineScope {
+            val m = async(Dispatchers.IO) {
+                runCatching { tmdb.searchMovie(apiKey, parsed.title, parsed.year).results.map { it.toCandidate("movie") } }
+                    .getOrDefault(emptyList())
+            }
+            val t = async(Dispatchers.IO) {
+                runCatching { tmdb.searchTv(apiKey, parsed.title, parsed.year).results.map { it.toCandidate("tv") } }
+                    .getOrDefault(emptyList())
+            }
+            m.await() to t.await()
         }
-        // Always include TV results too so the Series filter works.
-        runCatching {
-            out += tmdb.searchTv(apiKey, parsed.title, parsed.year).results.map { it.toCandidate("tv") }
-        }
-        return out.distinctBy { it.imdbId }
+        val out = (movies + tv).distinctBy { it.imdbId }
+        if (out.isNotEmpty()) searchCache[cacheKey] = out
+        return out
     }
 
     suspend fun clearCache() {

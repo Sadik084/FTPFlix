@@ -15,10 +15,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.History
@@ -58,12 +60,14 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.media3.common.util.UnstableApi
 import com.ftpflix.core.util.formatBytes
 import com.ftpflix.sources.resolve.StreamSource
 import com.ftpflix.ui.theme.Spacing
 import com.ftpflix.update.AppUpdateStatus
 
 // Material 3 settings: grouped cards with icon tiles, badges, destructive row, dialogs.
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 fun SettingsScreen(
     onOpenHistory: () -> Unit = {},
@@ -177,22 +181,26 @@ fun SettingsScreen(
                     StreamSource.CIRCLE_FTP,
                     StreamSource.ROAR_ZONE,
                     StreamSource.HD_HUB,
+                    StreamSource.HYPER,
                 )
                 sources.forEachIndexed { index, source ->
                     val enabled = source in enabledSources
                     val isPrimary = sourceOrder.firstOrNull() == source
+                    // Cascade position among enabled sources; primary is 1st.
+                    val fallbackRank = sourceOrder.filter { it in enabledSources }.indexOf(source) + 1
                     SettingsRow(
                         icon = when (source) {
                             StreamSource.CIRCLE_FTP -> Icons.Rounded.Language
                             StreamSource.ROAR_ZONE -> Icons.Rounded.Movie
                             StreamSource.HD_HUB -> Icons.Rounded.Link
+                            StreamSource.HYPER -> Icons.Rounded.Bolt
                             StreamSource.AUTO -> Icons.Rounded.PlayArrow
                         },
                         title = source.label,
                         subtitle = when {
                             !enabled -> "Disabled"
                             isPrimary -> "Primary source"
-                            else -> "Secondary"
+                            else -> "Fallback $fallbackRank"
                         },
                         badge = if (isPrimary && enabled) "Primary" else null,
                         trailing = {
@@ -214,6 +222,7 @@ fun SettingsScreen(
                     )
                     Spacer(Modifier.height(6.dp))
                     Row(
+                        Modifier.horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
                     ) {
                         sourceOrder.filter { it in enabledSources }.forEach { s ->

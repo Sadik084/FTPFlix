@@ -22,7 +22,8 @@ object DatabaseModule {
                 FtpDatabase.MIGRATION_5_6,
                 FtpDatabase.MIGRATION_6_7,
                 FtpDatabase.MIGRATION_7_8,
-                FtpDatabase.MIGRATION_8_9
+                FtpDatabase.MIGRATION_8_9,
+                FtpDatabase.MIGRATION_9_10
             )
             // Pre-v4 schemas had no data worth keeping; v4+ upgrades preserve it.
             .fallbackToDestructiveMigrationFrom(true, 1, 2, 3)

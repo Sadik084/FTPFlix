@@ -41,6 +41,7 @@ import com.ftpflix.ui.search.SearchScreen
 import com.ftpflix.ui.search.SeeAllScreen
 import com.ftpflix.ui.settings.SettingsScreen
 import com.ftpflix.ui.theme.Motion
+import kotlinx.serialization.json.Json
 
 // Only navigate when the current screen is idle, so taps during a transition are dropped.
 private fun NavHostController.canNavigate() =
@@ -244,7 +245,7 @@ fun AppNavHost(navController: NavHostController = rememberNavController()) {
             composable<DetailsRoute> {
                 DetailsScreen(
                     onBack = { navController.popSafely() },
-                    onPlay = { (mediaKey, contentKey, title, posterUrl, episodeLabel, year) ->
+                    onPlay = { (mediaKey, contentKey, title, posterUrl, episodeLabel, year, headers) ->
                         navController.navigateDebounced(
                             PlayerRoute(
                                 mediaKey = mediaKey.toRouteToken(),
@@ -253,6 +254,7 @@ fun AppNavHost(navController: NavHostController = rememberNavController()) {
                                 posterUrl = posterUrl ?: "",
                                 episodeLabel = episodeLabel ?: "",
                                 year = year ?: 0,
+                                headers = runCatching { Json.encodeToString(headers) }.getOrDefault(""),
                             ),
                         )
                     },

@@ -11,6 +11,7 @@ data class EpisodeStream(
     val episode: Int?,
     val sizeDisplay: String,
     val score: Int,
+    val headers: Map<String, String> = emptyMap(),
 )
 
 @Immutable

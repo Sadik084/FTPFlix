@@ -31,7 +31,9 @@ data class PlayerRoute(
     val posterUrl: String = "",
     val episodeLabel: String = "",
     // Release year; keeps stream re-resolution inside the right movie.
-    val year: Int = 0
+    val year: Int = 0,
+    // JSON-encoded extra HTTP request headers for the stream (e.g. Referer).
+    val headers: String = ""
 )
 
 @Serializable

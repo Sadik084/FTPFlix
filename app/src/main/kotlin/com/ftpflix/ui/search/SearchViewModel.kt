@@ -85,36 +85,62 @@ class SearchViewModel @Inject constructor(
     }
 
     private suspend fun search(q: String, filter: SearchFilter): List<CatalogEntry> {
-        val query = q.trim()
-        val direct = candidatesFor(query)
+        val (base, year) = splitTitleYear(q)
+        val direct = candidatesFor(base, year)
         if (direct.isNotEmpty()) return applyFilter(direct, filter)
 
         // Glued-query fallback: insert a space at each position (e.g. "breakingbad" -> "breaking bad").
-        if ((!query.contains(' ')) && (query.length >= 6)) {
-            val maxVariants = minOf(query.length - 1, 20)
+        if ((!base.contains(' ')) && (base.length >= 6)) {
+            val maxVariants = minOf(base.length - 1, 20)
             for (i in 1..maxVariants) {
-                val variant = query.substring(0, i) + " " + query.substring(i)
-                val found = candidatesFor(variant)
+                val variant = base.substring(0, i) + " " + base.substring(i)
+                val found = candidatesFor(variant, year)
                 if (found.isNotEmpty()) return applyFilter(found, filter)
             }
         }
-        return emptyList()
+
+        // Typo-tolerant last resort: fuzzy-match the query against candidates.
+        return applyFilter(fuzzyCandidates(base, year), filter)
     }
 
-    private suspend fun candidatesFor(query: String): List<CatalogEntry> {
+    // "Inception 2010" -> ("Inception", 2010).
+    private fun splitTitleYear(query: String): Pair<String, Int?> {
+        val yearRegex = Regex("\\b((?:19|20)\\d{2})\\b")
+        val m = yearRegex.find(query) ?: return query.trim() to null
+        val year = m.groupValues[1].toIntOrNull()
+        val title = query.removeRange(m.range).trim()
+        return title to year
+    }
+
+    // Fuzzy fallback: run the search once, rank by similarity, keep close matches.
+    private suspend fun fuzzyCandidates(query: String, year: Int?): List<CatalogEntry> {
+        if (query.length < 3) return emptyList()
+        val all = candidatesFor(query, year)
+        if (all.isEmpty()) return emptyList()
+        return all.map { entry ->
+            val score = com.ftpflix.util.TitleMatchingUtils
+                .calculateSimilarityScore(query, entry.title)
+            entry to score
+        }
+            .filter { it.second >= 0.5 }
+            .sortedByDescending { it.second }
+            .map { it.first }
+    }
+
+    private suspend fun candidatesFor(query: String, year: Int?): List<CatalogEntry> {
         val parsed = ParsedName(
             title = query,
-            year = null,
+            year = year,
             season = null, episode = null,
             resolution = null, codec = null, isEpisode = false,
         )
-        return metadata.candidatesFor(parsed).map { (imdbId, title, year, posterUrl) ->
+        return metadata.candidatesFor(parsed).map { (imdbId, title, titleYear, posterUrl) ->
             val kind = if (imdbId.startsWith("tv:")) "series" else "movie"
             CatalogEntry(
                 id = "tmdb:$imdbId",
                 kind = kind,
                 title = title,
-                year = year,
+                year = titleYear,
                 posterUrl = posterUrl,
                 hasFile = false,
             )

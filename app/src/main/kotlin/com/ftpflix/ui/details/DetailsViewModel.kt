@@ -11,6 +11,7 @@ import com.ftpflix.data.model.MovieMetadata
 import com.ftpflix.data.repository.MetadataRepository
 import com.ftpflix.data.repository.MyListRepository
 import com.ftpflix.sources.hdhub.HdHubResolver
+import com.ftpflix.sources.hyper.HyperResolver
 import com.ftpflix.sources.resolve.EpisodeStream
 import com.ftpflix.sources.resolve.ResolvedStream
 import com.ftpflix.sources.resolve.SeriesCatalog
@@ -57,11 +58,11 @@ data class DetailsUi(
     val episodeNames: Map<Int, Map<Int, String>> = emptyMap(),
     /** Pinned stream source; AUTO uses the user-configured order from Settings. */
     val selectedSource: StreamSource = StreamSource.AUTO,
-    /** HdHub quality tier (null = best available). Only consulted when [selectedSource] is HdHub. */
-    val hdhubHeight: Int? = null,
-    /** Quality tiers the HdHub addon currently offers for this title (best first). */
-    val hdhubQualities: List<Int> = emptyList(),
-    val loadingHdhubQualities: Boolean = false,
+    /** Pinned addon quality tier (null = best available). Only consulted for addon sources. */
+    val qualityHeight: Int? = null,
+    /** Quality tiers the pinned addon currently offers for this title (best first). */
+    val qualityTiers: List<Int> = emptyList(),
+    val loadingQualities: Boolean = false,
     /** Source chips to show: AUTO + user-enabled sources in the user order. */
     val availableSources: List<StreamSource> = listOf(StreamSource.AUTO),
     /** Per-source resolution outcomes (movies), so tabs reuse and show status. */
@@ -76,6 +77,7 @@ data class DetailsUi(
     val isSeries: Boolean get() = metadata?.kind == "series"
 }
 
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @HiltViewModel
 class DetailsViewModel @Inject constructor(
     private val metadataRepo: MetadataRepository,
@@ -83,6 +85,7 @@ class DetailsViewModel @Inject constructor(
     private val streamResolver: StreamResolver,
     private val seriesResolver: SeriesResolver,
     private val hdhub: HdHubResolver,
+    private val hyper: HyperResolver,
     private val sourceSettings: SourceSettingsStore,
     private val playbackSession: PlaybackSession,
     savedState: SavedStateHandle,
@@ -92,6 +95,8 @@ class DetailsViewModel @Inject constructor(
         savedState.toRoute<DetailsRoute>().key.fromRouteToken()
     }.getOrDefault("")
     private val mediaId: String = if (key.startsWith("tmdb:")) key.removePrefix("tmdb:") else ""
+    // Numeric TMDB id used as a fallback id for addon lookups when IMDb is missing.
+    private val tmdbNum: String? = mediaId.substringAfter(':', "").takeIf { it.isNotEmpty() }
 
     private val _ui = MutableStateFlow(DetailsUi())
     val ui: StateFlow<DetailsUi> = _ui.asStateFlow()
@@ -99,11 +104,11 @@ class DetailsViewModel @Inject constructor(
     // Session-scoped results/catalogs so re-clicks reuse fetches.
     private val sessionMovieResults = mutableMapOf<StreamSource, SourceResult>()
     private val sessionCatalogs = mutableMapOf<StreamSource, SeriesCatalog?>()
-    private val sessionHdhubQualities = mutableMapOf<String, List<Int>>()
+    private val sessionQualities = mutableMapOf<String, List<Int>>()
 
     private var cachedOrder: List<StreamSource> = SourceSettingsStore.DEFAULT_ORDER
     private var cachedEnabled: Set<StreamSource> = setOf(
-        StreamSource.CIRCLE_FTP, StreamSource.ROAR_ZONE, StreamSource.HD_HUB,
+        StreamSource.CIRCLE_FTP, StreamSource.ROAR_ZONE, StreamSource.HD_HUB, StreamSource.HYPER,
     )
 
     init {
@@ -193,10 +198,11 @@ class DetailsViewModel @Inject constructor(
 
     private suspend fun resolveOne(source: StreamSource, title: String, year: Int?): SourceResult {
         return try {
-            val height = if (source == StreamSource.HD_HUB) _ui.value.hdhubHeight else null
+            val height = if (source.isAddon) _ui.value.qualityHeight else null
             val stream = streamResolver.resolve(
                 title, year,
                 imdbId = _ui.value.metadata?.imdbId,
+                tmdbId = tmdbNum,
                 force = false,
                 source = source,
                 preferredHeight = height,
@@ -246,8 +252,8 @@ class DetailsViewModel @Inject constructor(
         if (_ui.value.selectedSource == source) return
         _ui.update { it.copy(selectedSource = source, streamError = null, episodeError = null) }
         if (_ui.value.isSeries) {
-            if (source == StreamSource.HD_HUB) {
-                // HdHub has no browse endpoint: keep the current list, resolve per episode.
+            if (source.isAddon) {
+                // Addons have no browse endpoint: keep the current list, resolve per episode.
                 if (_ui.value.series == null) ensureSeriesCatalog(StreamSource.AUTO)
             } else {
                 ensureSeriesCatalog(source)
@@ -255,16 +261,17 @@ class DetailsViewModel @Inject constructor(
         } else {
             ensureMovieResolved(source)
         }
-        if (source == StreamSource.HD_HUB) fetchHdhubQualities()
+        if (source.isAddon) fetchQualities()
     }
 
-    // Pin an HdHub quality tier; only HdHub re-resolves.
-    fun selectHdHubQuality(height: Int?) {
-        if (_ui.value.hdhubHeight == height) return
-        _ui.update { it.copy(hdhubHeight = height, streamError = null) }
+    // Pin an addon quality tier; addon sources re-resolve.
+    fun selectQuality(height: Int?) {
+        if (_ui.value.qualityHeight == height) return
+        _ui.update { it.copy(qualityHeight = height, streamError = null) }
         sessionMovieResults.remove(StreamSource.HD_HUB)
+        sessionMovieResults.remove(StreamSource.HYPER)
         val selected = _ui.value.selectedSource
-        if ((!_ui.value.isSeries) && ((selected == StreamSource.HD_HUB) || (selected == StreamSource.AUTO))) {
+        if ((!_ui.value.isSeries) && (selected.isAddon || selected == StreamSource.AUTO)) {
             ensureMovieResolved(selected)
         }
     }
@@ -377,45 +384,54 @@ class DetailsViewModel @Inject constructor(
 
     fun selectSeason(season: Int) {
         _ui.update { it.copy(selectedSeason = season) }
-        if ((_ui.value.selectedSource == StreamSource.HD_HUB) && _ui.value.isSeries) {
-            fetchHdhubQualities()
+        if (_ui.value.selectedSource.isAddon && _ui.value.isSeries) {
+            fetchQualities()
         }
     }
 
-    // Load quality tiers HdHub currently offers for this title.
-    private fun fetchHdhubQualities() {
+    // Load quality tiers the pinned addon currently offers for this title.
+    private fun fetchQualities() {
         val ui = _ui.value
         val imdb = ui.metadata?.imdbId ?: return
-        val cacheKey = if (ui.isSeries) "s${ui.selectedSeason ?: 1}" else "movie"
-        sessionHdhubQualities[cacheKey]?.let {
-            _ui.update { s -> s.copy(hdhubQualities = it, loadingHdhubQualities = false) }
+        val cacheKey = "${ui.selectedSource.name}:${if (ui.isSeries) "s${ui.selectedSeason ?: 1}" else "movie"}"
+        sessionQualities[cacheKey]?.let {
+            _ui.update { s -> s.copy(qualityTiers = it, loadingQualities = false) }
             return
         }
         viewModelScope.launch {
-            _ui.update { it.copy(loadingHdhubQualities = true) }
+            _ui.update { it.copy(loadingQualities = true) }
             val heights = try {
                 if (ui.isSeries) {
                     val season = ui.selectedSeason ?: 1
                     val episode = ui.series?.season(season)?.firstOrNull()?.episode ?: 1
-                    hdhub.availableHeights("series", "$imdb:$season:$episode")
+                    availableHeights("series", "$imdb:$season:$episode")
                 } else {
-                    hdhub.availableHeights("movie", imdb)
+                    availableHeights("movie", imdb)
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.e(TAG, "hdhub quality fetch failed", e)
+                Log.e(TAG, "addon quality fetch failed", e)
                 emptyList()
             }
-            sessionHdhubQualities[cacheKey] = heights
-            _ui.update { it.copy(hdhubQualities = heights, loadingHdhubQualities = false) }
+            sessionQualities[cacheKey] = heights
+            _ui.update { it.copy(qualityTiers = heights, loadingQualities = false) }
+        }
+    }
+
+    // Quality tiers come from the pinned addon source.
+    private suspend fun availableHeights(type: String, id: String): List<Int> {
+        return if (_ui.value.selectedSource == StreamSource.HYPER) {
+            hyper.availableHeights(type, id)
+        } else {
+            hdhub.availableHeights(type, id)
         }
     }
 
     fun retrySeries() {
-        // Retry the source the user is on; HdHub falls back to the catalog source.
+        // Retry the source the user is on; addons fall back to the catalog source.
         val selected = _ui.value.selectedSource
-        val source = if (selected == StreamSource.HD_HUB) StreamSource.AUTO else selected
+        val source = if (selected.isAddon) StreamSource.AUTO else selected
         sessionCatalogs.remove(source)
         _ui.update { it.copy(seriesError = null) }
         ensureSeriesCatalog(source)
@@ -424,25 +440,40 @@ class DetailsViewModel @Inject constructor(
     // Series episode tap: catalog URL for AUTO/Circle/Roar, on-demand resolve for HdHub.
     fun requestEpisodePlayback(episode: EpisodeStream) {
         prepareEpisodePlayback(episode)
-        val (_, uiMetadata, _, _, _, _, _, _, _, _, _, _, uiSelectedSource, uiHdhubHeight, _, _, _, _) =
+        val (_, uiMetadata, _, _, _, _, _, _, _, _, _, _, uiSelectedSource, uiQualityHeight, _, _, _, _) =
             _ui.value
         when (uiSelectedSource) {
             StreamSource.AUTO, StreamSource.CIRCLE_FTP, StreamSource.ROAR_ZONE -> {
                 _ui.update { it.copy(pendingPlay = playRequestFor(episode, episode.url), episodeError = null) }
             }
-            StreamSource.HD_HUB -> {
+            // Addons have no catalog urls; resolve the episode on demand.
+            StreamSource.HD_HUB, StreamSource.HYPER -> {
                 viewModelScope.launch {
                     _ui.update { it.copy(resolvingEpisode = true, episodeError = null) }
-                    val resolved = hdhub.resolveEpisode(
-                        uiMetadata?.imdbId,
-                        episode.season ?: 1,
-                        episode.episode ?: 1,
-                        uiHdhubHeight,
-                    )
+                    val resolved = if (uiSelectedSource == StreamSource.HYPER) {
+                        hyper.resolveEpisode(
+                            uiMetadata?.imdbId,
+                            episode.season ?: 1,
+                            episode.episode ?: 1,
+                            uiQualityHeight,
+                        )
+                    } else {
+                        hdhub.resolveEpisode(
+                            uiMetadata?.imdbId,
+                            episode.season ?: 1,
+                            episode.episode ?: 1,
+                            uiQualityHeight,
+                        )
+                    }
                     if (resolved != null) {
                         _ui.update { it.copy(resolvingEpisode = false, pendingPlay = playRequestFor(episode, resolved.url)) }
                     } else {
-                        _ui.update { it.copy(resolvingEpisode = false, episodeError = "HdHub has no playable stream for this episode.") }
+                        _ui.update {
+                            it.copy(
+                                resolvingEpisode = false,
+                                episodeError = "${uiSelectedSource.label} has no playable stream for this episode.",
+                            )
+                        }
                     }
                 }
             }
@@ -471,6 +502,7 @@ class DetailsViewModel @Inject constructor(
             posterUrl = uiMetadata?.posterUrl,
             episodeLabel = episodeTitle,
             year = uiMetadata?.year,
+            headers = episode.headers,
         )
     }
 
