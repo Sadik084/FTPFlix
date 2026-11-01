@@ -15,7 +15,7 @@ import kotlin.time.Duration.Companion.seconds
 import javax.inject.Inject
 import javax.inject.Singleton
 
-// Primary stream source backed by the CircleFTP search API.
+// Resolves movies and series through the CircleFTP API.
 @Singleton
 class CircleFtpResolver @Inject constructor(
     private val api: CircleFtpApi,
@@ -70,26 +70,27 @@ class CircleFtpResolver @Inject constructor(
         val matches = posts.filter { it.isSeries() && matchesPost(title, year, it) }
         if (matches.isEmpty()) return emptyList()
 
+        // Search may return other shows with the same name. Keep only the best match.
+        val bestPost = bestSeriesPost(title, year, matches) ?: return emptyList()
+
         val episodes = ArrayList<EpisodeStream>()
-        for ((postId, _, _, _, _, _) in matches.take(MAX_DETAILS)) {
-            val detail = runCatching { api.detail(postId) }.getOrNull() ?: continue
-            val seasons = api.seasons(detail)
-            for ((seasonIdx, season) in seasons.withIndex()) {
-                val seasonNumber = season.seasonName?.let { seasonNumRegex.find(it)?.value?.toIntOrNull() }
-                    ?: (seasonIdx + 1)
-                for ((epIdx, ep) in season.episodes.withIndex()) {
-                    val link = ep.link ?: continue
-                    val (parsedSeason, parsedEpisode) = PathEpisodeParser.parse(ep.title.orEmpty())
-                    episodes += EpisodeStream(
-                        url = link,
-                        host = CircleFtpApi.HOST_LABEL,
-                        title = ep.title.orEmpty(),
-                        season = parsedSeason ?: seasonNumber,
-                        episode = parsedEpisode ?: (epIdx + 1),
-                        sizeDisplay = "",
-                        score = episodeScore(ep.title.orEmpty(), preferredHeight),
-                    )
-                }
+        val detail = runCatching { api.detail(bestPost.id) }.getOrNull() ?: return emptyList()
+        val seasons = api.seasons(detail)
+        for ((seasonIdx, season) in seasons.withIndex()) {
+            val seasonNumber = season.seasonName?.let { seasonNumRegex.find(it)?.value?.toIntOrNull() }
+                ?: (seasonIdx + 1)
+            for ((epIdx, ep) in season.episodes.withIndex()) {
+                val link = ep.link ?: continue
+                val (parsedSeason, parsedEpisode) = PathEpisodeParser.parse(ep.title.orEmpty())
+                episodes += EpisodeStream(
+                    url = link,
+                    host = CircleFtpApi.HOST_LABEL,
+                    title = ep.title.orEmpty(),
+                    season = parsedSeason ?: seasonNumber,
+                    episode = parsedEpisode ?: (epIdx + 1),
+                    sizeDisplay = "",
+                    score = episodeScore(ep.title.orEmpty(), preferredHeight),
+                )
             }
         }
         if (episodes.isNotEmpty()) {
@@ -98,7 +99,7 @@ class CircleFtpResolver @Inject constructor(
         return episodes
     }
 
-    // Gate: every meaningful query token must appear in the candidate; year gate second.
+    // All title words must be in the candidate, then the year is checked.
     private fun matchesPost(queryTitle: String, queryYear: Int?, post: CirclePost): Boolean {
         val queryTokens = TitleMatchingUtils.extractMeaningfulTokens(queryTitle)
         if (queryTokens.isNotEmpty()) {
@@ -112,7 +113,31 @@ class CircleFtpResolver @Inject constructor(
         return (postYear == null) || (queryYear == null) || (kotlin.math.abs(postYear - queryYear) <= 1)
     }
 
-    // Ranks candidates: exact normalized-title match wins; resolution breaks ties.
+    // Picks the one series post that really matches, so similar shows don't mix.
+    private fun bestSeriesPost(
+        queryTitle: String,
+        queryYear: Int?,
+        contenders: List<CirclePost>,
+    ): CirclePost? {
+        if (contenders.isEmpty()) return null
+        val queryClean = TitleMatchingUtils.cleanTitle(queryTitle)
+
+        // Exact name match wins.
+        contenders.firstOrNull { TitleMatchingUtils.cleanTitle(it.displayName) == queryClean }
+            ?.let { return it }
+
+        // Otherwise use the closest year, then the fewest extra words.
+        return contenders.minWithOrNull(
+            compareBy<CirclePost> {
+                val postYear = it.year?.trim()?.take(4)?.toIntOrNull()
+                if (queryYear != null && postYear != null) kotlin.math.abs(postYear - queryYear) else 0
+            }.thenBy {
+                TitleMatchingUtils.extractMeaningfulTokens(it.displayName).size
+            },
+        )
+    }
+
+    // Rank by title match, then by resolution.
     private fun movieScore(
         queryTitle: String,
         url: String,
@@ -166,7 +191,7 @@ class CircleFtpResolver @Inject constructor(
         return score
     }
 
-    // Best-effort content-length probe for the display size.
+    // Check file size for display.
     private suspend fun probeSize(url: String): String {
         val size = withTimeoutOrNull(3.seconds) { httpProbe.contentLength(url) }
         return size?.let { com.ftpflix.core.util.formatBytes(it) } ?: ""
