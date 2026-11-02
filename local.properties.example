@@ -16,3 +16,10 @@ GITHUB_REPO=ftpflix
 
 # GitHub API base.
 GITHUB_RELEASE_API=https://api.github.com
+
+# Optional stable-variant overrides; defaults to GITHUB_OWNER / GITHUB_REPO above.
+#STABLE_GITHUB_OWNER=your-github-username
+#STABLE_GITHUB_REPO=ftpflix
+
+# Preferred OTA package for the stable variant: "auto" (default), "universal", or an ABI.
+#STABLE_OTA_PACKAGE=auto

@@ -42,6 +42,10 @@ android {
             "\"${configValue("GITHUB_RELEASE_API", "https://api.github.com")}\""
         )
         buildConfigField(
+            "String", "PREFERRED_OTA_PACKAGE",
+            "\"${configValue("PREFERRED_OTA_PACKAGE", "auto")}\""
+        )
+        buildConfigField(
             "String", "CIRCLEFTP_API_BASE",
             "\"${configValue("CIRCLEFTP_API_BASE", "http://new.circleftp.net:5000/api")}\""
         )
@@ -56,7 +60,7 @@ android {
     }
 
     signingConfigs {
-        create("release") {
+        create("stable") {
             val keystorePropsFile = rootProject.file("keystore.properties")
             if (keystorePropsFile.exists()) {
                 val props = Properties().apply {
@@ -71,7 +75,8 @@ android {
     }
 
     buildTypes {
-        release {
+        // Production variant. Minified, shrunk, and signed.
+        create("stable") {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -80,7 +85,19 @@ android {
             )
             // Signed when keystore.properties exists (it does); without it the
             // APK would come out unsigned and Android would refuse to install it.
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = signingConfigs.getByName("stable")
+            buildConfigField(
+                "String", "GITHUB_OWNER",
+                "\"${configValue("STABLE_GITHUB_OWNER", configValue("GITHUB_OWNER"))}\""
+            )
+            buildConfigField(
+                "String", "GITHUB_REPO",
+                "\"${configValue("STABLE_GITHUB_REPO", configValue("GITHUB_REPO"))}\""
+            )
+            buildConfigField(
+                "String", "PREFERRED_OTA_PACKAGE",
+                "\"${configValue("STABLE_OTA_PACKAGE", "auto")}\""
+            )
         }
     }
 
@@ -169,23 +186,51 @@ dependencies {
     implementation(libs.androidx.profileinstaller)
 }
 
-// Copies split/universal release APKs into an ota/ folder with publish-ready names.
+val apkOutputRoot = layout.buildDirectory
+
+tasks.configureEach {
+    if (name == "assembleStable") {
+        doLast {
+            val dir = apkOutputRoot.dir("outputs/apk/stable").get().asFile
+            dir.listFiles { f -> f.isFile && f.extension == "apk" }?.forEach { apk ->
+                val name = when {
+                    apk.name.contains("arm64-v8a") -> "FTPFlix-arm64-v8a.apk"
+                    apk.name.contains("armeabi-v7a") -> "FTPFlix-armeabi-v7a.apk"
+                    apk.name.contains("x86_64") -> "FTPFlix-x86_64.apk"
+                    else -> "FTPFlix-universal.apk"
+                }
+                if (apk.name != name) apk.copyTo(File(apk.parentFile, name), overwrite = true)
+            }
+        }
+    }
+}
+
+tasks.configureEach {
+    if (name == "assembleDebug") {
+        doLast {
+            val dir = apkOutputRoot.dir("outputs/apk/debug").get().asFile
+            dir.listFiles { f -> f.isFile && f.extension == "apk" }?.forEach { apk ->
+                val name = when {
+                    apk.name.contains("arm64-v8a") -> "FTPFlix-debug-arm64-v8a.apk"
+                    apk.name.contains("armeabi-v7a") -> "FTPFlix-debug-armeabi-v7a.apk"
+                    apk.name.contains("x86_64") -> "FTPFlix-debug-x86_64.apk"
+                    else -> "FTPFlix-debug-universal.apk"
+                }
+                if (apk.name != name) apk.copyTo(File(apk.parentFile, name), overwrite = true)
+            }
+        }
+    }
+}
+
+// Copies stable release APKs into an ota/ folder with publish-ready names.
 tasks.register("prepareOtaApks") {
-    dependsOn("assembleRelease")
-    val apkDir = layout.buildDirectory.dir("outputs/apk/release")
-    val otaDir = layout.buildDirectory.dir("outputs/apk/release/ota")
+    dependsOn("assembleStable")
     doLast {
-        val src = apkDir.get().asFile
-        val dst = otaDir.get().asFile
+        val src = apkOutputRoot.dir("outputs/apk/stable").get().asFile
+        val dst = apkOutputRoot.dir("outputs/apk/stable/ota").get().asFile
         dst.mkdirs()
         src.listFiles { f -> f.isFile && f.extension == "apk" }?.forEach { apk ->
-            val name = when {
-                apk.name.contains("arm64-v8a") -> "FTPFlix-arm64-v8a.apk"
-                apk.name.contains("armeabi-v7a") -> "FTPFlix-armeabi-v7a.apk"
-                apk.name.contains("x86_64") -> "FTPFlix-x86_64.apk"
-                else -> "FTPFlix-universal.apk"
-            }
-            apk.copyTo(File(dst, name), overwrite = true)
+            apk.copyTo(File(dst, apk.name), overwrite = true)
         }
     }
 }

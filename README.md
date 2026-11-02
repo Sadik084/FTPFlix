@@ -86,7 +86,8 @@ git clone https://github.com/Sadik084/FTPFlix.git
 cd FTPFlix
 cp local.properties.example local.properties   # then set your TMDB_API_KEY
 ./gradlew assembleDebug                        # debug build
-./gradlew prepareOtaApks                       # release APKs (ABI-split + universal) with publish-ready names
+./gradlew assembleStable                       # production APK (renamed automatically)
+./gradlew prepareOtaApks                       # copy stable APKs into ota/ with publish-ready names
 ```
 
 You can also open the project in Android Studio and press **Run**.
@@ -106,6 +107,8 @@ Everything is set in `local.properties` (copy it from `local.properties.example`
 | `ROARZONE_BASE_URL` | RoarZone Emby server | `https://play.roarzone.net` |
 | `GITHUB_OWNER` / `GITHUB_REPO` | Where in-app updates are fetched from | `Sadik084` / `FTPFlix` |
 | `GITHUB_RELEASE_API` | GitHub API base URL | `https://api.github.com` |
+| `STABLE_OTA_PACKAGE` | Preferred APK for OTA in the stable variant (`auto`, `universal`, or an ABI) | `auto` |
+| `STABLE_GITHUB_OWNER` / `STABLE_GITHUB_REPO` | Stable OTA source override | inherit `GITHUB_OWNER` / `GITHUB_REPO` |
 
 Release signing is configured in `keystore.properties` (see `keystore.properties.example`).
 
