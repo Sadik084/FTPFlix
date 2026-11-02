@@ -57,12 +57,15 @@ data class GitHubRelease(
     val body: String? = null,
     val assets: List<GitHubAsset> = emptyList(),
 ) {
-    /** Picks the installable APK: ABI-specific first, then universal, then any. */
-    fun apkAsset(abi: String? = null): GitHubAsset? {
+    /** Picks the APK: preferred package, then ABI, then universal, then any. */
+    fun apkAsset(abi: String? = null, preferred: String? = null): GitHubAsset? {
         val apks = assets.filter { (name, _, _, contentType) ->
             name.endsWith(".apk", ignoreCase = true) &&
                 (contentType.isBlank() || contentType.contains("android", ignoreCase = true))
         }
+        preferred?.let { p ->
+            apks.firstOrNull { it.name.contains(p, ignoreCase = true) }
+        }?.let { return it }
         abi?.let { a -> apks.firstOrNull { it.name.contains(a, ignoreCase = true) } }?.let { return it }
         apks.firstOrNull { it.name.contains("universal", ignoreCase = true) }?.let { return it }
         return apks.firstOrNull()
@@ -249,16 +252,32 @@ class AppUpdateManager @Inject constructor(
     /** Device ABI (e.g. "arm64-v8a") used to pick the matching APK asset. */
     private fun currentAbi(): String? = Build.SUPPORTED_ABIS.firstOrNull()
 
+    /** The APK this variant prefers for OTA; "auto" means default. */
+    private fun preferredOtaPackage(): String? =
+        BuildConfig.PREFERRED_OTA_PACKAGE.takeIf { it.isNotBlank() && it != "auto" }
+
     private suspend fun fetchLatestRelease(): Result<GitHubRelease> = withContext(Dispatchers.IO) {
         try {
             val url = "${BuildConfig.GITHUB_RELEASE_API}/repos/${BuildConfig.GITHUB_OWNER}/${BuildConfig.GITHUB_REPO}/releases/latest"
             val request = Request.Builder().url(url)
                 .header("Accept", "application/vnd.github+json")
                 .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
+                .header("User-Agent", USER_AGENT)
                 .build()
             val body = okHttp.newCall(request).execute().use { resp ->
                 when {
                     resp.code == 404 -> throw IOException("Update repository was not found.")
+                    resp.code == 403 -> {
+                        val remaining = resp.header("X-RateLimit-Remaining")
+                        val retryAfter = resp.header("Retry-After")
+                        if (remaining == "0") {
+                            throw IOException(
+                                "GitHub rate limit reached. Try again in ${retryAfter ?: "a few"} minutes."
+                            )
+                        } else {
+                            throw IOException("Update server rejected the request (403).")
+                        }
+                    }
                     !resp.isSuccessful -> throw IOException("Update server error (${resp.code}).")
                     else -> resp.body.string()
                 }
@@ -272,7 +291,7 @@ class AppUpdateManager @Inject constructor(
     }
 
     private fun onReleaseChecked(release: GitHubRelease) {
-        val apk = release.apkAsset(currentAbi())
+        val apk = release.apkAsset(currentAbi(), preferredOtaPackage())
         val latest = parseVersion(release.tagName)
         val current = parseVersion(BuildConfig.VERSION_NAME) ?: listOf(0)
         when {
@@ -486,6 +505,8 @@ class AppUpdateManager @Inject constructor(
         private val POLL_INTERVAL = 500.milliseconds
         const val MIN_APK_BYTES = 1024L * 1024
         const val GITHUB_API_VERSION = "2022-11-28"
+        const val USER_AGENT =
+            "FTPFlix/android ${BuildConfig.VERSION_NAME} (${BuildConfig.GITHUB_OWNER}/${BuildConfig.GITHUB_REPO})"
         val ZIP_MAGIC = byteArrayOf(0x50, 0x4B, 0x03, 0x04)
 
         const val KEY_DOWNLOAD_ID = "download_id"
