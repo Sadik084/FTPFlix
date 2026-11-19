@@ -208,7 +208,15 @@ class MetadataRepository @Inject constructor(
             }
             m.await() to t.await()
         }
-        val out = (movies + tv).distinctBy { it.imdbId }
+        val query = parsed.title
+        val out = (movies + tv)
+            .distinctBy { it.imdbId }
+            .map { candidate ->
+                val score = com.ftpflix.util.TitleMatchingUtils.calculateSimilarityScore(query, candidate.title)
+                candidate to score
+            }
+            .sortedByDescending { it.second }
+            .map { it.first }
         if (out.isNotEmpty()) searchCache[cacheKey] = out
         return out
     }
