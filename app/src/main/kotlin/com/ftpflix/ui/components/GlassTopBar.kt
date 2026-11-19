@@ -92,16 +92,14 @@ fun GlassTopBar(
             }
 
             // Hairline divider indicator when content is scrolled underneath
-            if (scrim > 0.05f) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(1.dp)
-                        .background(
-                            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.20f * scrim)
-                        )
-                )
-            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(
+                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.20f * scrim)
+                    )
+            )
         }
     }
 }

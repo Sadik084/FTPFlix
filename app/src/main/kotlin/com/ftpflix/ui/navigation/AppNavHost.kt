@@ -5,6 +5,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Bookmarks
 import androidx.compose.material.icons.rounded.Home
@@ -12,6 +13,8 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.VideoLibrary
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffoldValue
@@ -19,6 +22,7 @@ import androidx.compose.material3.adaptive.navigationsuite.rememberNavigationSui
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
 import androidx.lifecycle.Lifecycle
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -147,154 +151,159 @@ fun AppNavHost(navController: NavHostController = rememberNavController()) {
         //  - Back pops slide out full width while the revealed page slides in a quarter,
         //    using one shared LinearEasing duration so the gesture tracks the finger.
         //  - Player opens as a vertical modal rise; back uses the same slide as any page.
-        NavHost(
-            navController = navController,
-            startDestination = HomeRoute,
-            enterTransition = {
-                val initialIdx = topLevelIndex(initialState.destination)
-                val targetIdx = topLevelIndex(targetState.destination)
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background,
+        ) {
+            NavHost(
+                navController = navController,
+                startDestination = HomeRoute,
+                enterTransition = {
+                    val initialIdx = topLevelIndex(initialState.destination)
+                    val targetIdx = topLevelIndex(targetState.destination)
 
-                if ((initialIdx != -1) && (targetIdx != -1)) {
-                    val fromLeft = targetIdx < initialIdx
-                    slideInHorizontally(Motion.PageSlide) { if (fromLeft) -it else it }
-                } else {
-                    slideInHorizontally(Motion.PageSlide) { it }
-                }
-            },
-            exitTransition = {
-                when {
-                    // Player is a vertical modal: whatever is underneath holds still (N2).
-                    targetState.destination.hasRoute<PlayerRoute>() ->
-                        ExitTransition.KeepUntilTransitionsFinished
-                    else -> {
-                        val initialIdx = topLevelIndex(initialState.destination)
-                        val targetIdx = topLevelIndex(targetState.destination)
-                        if ((initialIdx != -1) && (targetIdx != -1)) {
-                            val exitLeft = targetIdx > initialIdx
-                            slideOutHorizontally(Motion.PageSlide) { if (exitLeft) -it else it }
-                        } else {
-                            // Push: parallax a quarter width under the incoming page (N5).
-                            slideOutHorizontally(Motion.PageSlide) { -it / 4 }
+                    if ((initialIdx != -1) && (targetIdx != -1)) {
+                        val fromLeft = targetIdx < initialIdx
+                        slideInHorizontally(Motion.PageSlide) { if (fromLeft) -it else it }
+                    } else {
+                        slideInHorizontally(Motion.PageSlide) { it }
+                    }
+                },
+                exitTransition = {
+                    when {
+                        // Player is a vertical modal: whatever is underneath holds still (N2).
+                        targetState.destination.hasRoute<PlayerRoute>() ->
+                            ExitTransition.KeepUntilTransitionsFinished
+                        else -> {
+                            val initialIdx = topLevelIndex(initialState.destination)
+                            val targetIdx = topLevelIndex(targetState.destination)
+                            if ((initialIdx != -1) && (targetIdx != -1)) {
+                                val exitLeft = targetIdx > initialIdx
+                                slideOutHorizontally(Motion.PageSlide) { if (exitLeft) -it else it }
+                            } else {
+                                // Push: parallax a quarter width under the incoming page (N5).
+                                slideOutHorizontally(Motion.PageSlide) { -it / 4 }
+                            }
                         }
                     }
-                }
-            },
-            popEnterTransition = {
-                val initialIdx = topLevelIndex(initialState.destination)
-                val targetIdx = topLevelIndex(targetState.destination)
-                if ((initialIdx != -1) && (targetIdx != -1)) {
-                    val fromLeft = targetIdx < initialIdx
-                    slideInHorizontally(Motion.PopSlide) { if (fromLeft) -it / 4 else it / 4 }
-                } else {
-                    slideInHorizontally(Motion.PopSlide) { -it / 4 }
-                }
-            },
-            popExitTransition = {
-                val initialIdx = topLevelIndex(initialState.destination)
-                val targetIdx = topLevelIndex(targetState.destination)
-                if ((initialIdx != -1) && (targetIdx != -1)) {
-                    val exitLeft = targetIdx > initialIdx
-                    slideOutHorizontally(Motion.PopSlide) { if (exitLeft) -it else it }
-                } else {
-                    slideOutHorizontally(Motion.PopSlide) { it }
-                }
-            },
-        ) {
-            composable<HomeRoute> {
-                HomeScreen(
-                    onOpen = { (id, _, _, _, _, _, _, _, _) ->
-                        navController.navigateDebounced(DetailsRoute(id.toRouteToken()))
-                    },
-                    onOpenKey = { (mediaKey, _, title, posterUrl, streamUrl, _, _, _, episodeLabel) ->
-                        navController.navigateDebounced(
-                            PlayerRoute(
-                                mediaKey = streamUrl.toRouteToken(),
-                                contentKey = mediaKey.toRouteToken(),
-                                title = title,
-                                posterUrl = posterUrl ?: "",
-                                episodeLabel = episodeLabel.orEmpty(),
-                            ),
-                        )
-                    },
-                    onSearch = { navController.navigateTopLevel(SearchRoute) },
-                    onSeeAll = { id -> navController.navigateDebounced(SeeAllRoute(id.toRouteToken())) },
-                )
-            }
-            composable<SearchRoute> {
-                SearchScreen(
-                    onOpen = { (id, _, _, _, _, _, _, _, _) ->
-                        navController.navigateDebounced(DetailsRoute(id.toRouteToken()))
-                    },
-                )
-            }
-            composable<LibraryRoute> {
-                LibraryScreen(
-                    onOpen = { (id, _, _, _, _, _, _, _, _) ->
-                        navController.navigateDebounced(DetailsRoute(id.toRouteToken()))
-                    },
-                )
-            }
-            composable<MyListRoute> {
-                MyListScreen(
-                    onOpen = { (id, _, _, _, _, _, _, _, _) ->
-                        navController.navigateDebounced(DetailsRoute(id.toRouteToken()))
-                    },
-                )
-            }
-            // Detail screens share the global transitions above.
-            composable<DetailsRoute> {
-                DetailsScreen(
-                    onBack = { navController.popSafely() },
-                    onPlay = { (mediaKey, contentKey, title, posterUrl, episodeLabel, year, headers) ->
-                        navController.navigateDebounced(
-                            PlayerRoute(
-                                mediaKey = mediaKey.toRouteToken(),
-                                contentKey = contentKey.toRouteToken(),
-                                title = title,
-                                posterUrl = posterUrl ?: "",
-                                episodeLabel = episodeLabel ?: "",
-                                year = year ?: 0,
-                                headers = runCatching { Json.encodeToString(headers) }.getOrDefault(""),
-                            ),
-                        )
-                    },
-                )
-            }
-            composable<PlayerRoute>(
-                enterTransition = {
-                    // Opens as a vertical modal rise; back slides out like any other page.
-                    slideInVertically(Motion.PlayerSlide) { it } + fadeIn(Motion.PlayerFade)
+                },
+                popEnterTransition = {
+                    val initialIdx = topLevelIndex(initialState.destination)
+                    val targetIdx = topLevelIndex(targetState.destination)
+                    if ((initialIdx != -1) && (targetIdx != -1)) {
+                        val fromLeft = targetIdx < initialIdx
+                        slideInHorizontally(Motion.PopSlide) { if (fromLeft) -it / 4 else it / 4 }
+                    } else {
+                        slideInHorizontally(Motion.PopSlide) { -it / 4 }
+                    }
+                },
+                popExitTransition = {
+                    val initialIdx = topLevelIndex(initialState.destination)
+                    val targetIdx = topLevelIndex(targetState.destination)
+                    if ((initialIdx != -1) && (targetIdx != -1)) {
+                        val exitLeft = targetIdx > initialIdx
+                        slideOutHorizontally(Motion.PopSlide) { if (exitLeft) -it else it }
+                    } else {
+                        slideOutHorizontally(Motion.PopSlide) { it }
+                    }
                 },
             ) {
-                PlayerScreen(
-                    onBack = { navController.popSafely() },
-                    // The destination's own enter/exit transition; PlayerScreen restores
-                    // orientation/system bars the moment its exit starts (N7).
-                    navTransition = transition,
-                )
-            }
-            composable<SeeAllRoute> { entry ->
-                val (routeShelfId) = entry.toRoute<SeeAllRoute>()
-                SeeAllScreen(
-                    shelfId = routeShelfId.fromRouteToken(),
-                    onBack = { navController.popSafely() },
-                    onOpen = { (id, _, _, _, _, _, _, _, _) ->
-                        navController.navigateDebounced(DetailsRoute(id.toRouteToken()))
+                composable<HomeRoute> {
+                    HomeScreen(
+                        onOpen = { (id, _, _, _, _, _, _, _, _) ->
+                            navController.navigateDebounced(DetailsRoute(id.toRouteToken()))
+                        },
+                        onOpenKey = { (mediaKey, _, title, posterUrl, streamUrl, _, _, _, episodeLabel) ->
+                            navController.navigateDebounced(
+                                PlayerRoute(
+                                    mediaKey = streamUrl.toRouteToken(),
+                                    contentKey = mediaKey.toRouteToken(),
+                                    title = title,
+                                    posterUrl = posterUrl ?: "",
+                                    episodeLabel = episodeLabel.orEmpty(),
+                                ),
+                            )
+                        },
+                        onSearch = { navController.navigateTopLevel(SearchRoute) },
+                        onSeeAll = { id -> navController.navigateDebounced(SeeAllRoute(id.toRouteToken())) },
+                    )
+                }
+                composable<SearchRoute> {
+                    SearchScreen(
+                        onOpen = { (id, _, _, _, _, _, _, _, _) ->
+                            navController.navigateDebounced(DetailsRoute(id.toRouteToken()))
+                        },
+                    )
+                }
+                composable<LibraryRoute> {
+                    LibraryScreen(
+                        onOpen = { (id, _, _, _, _, _, _, _, _) ->
+                            navController.navigateDebounced(DetailsRoute(id.toRouteToken()))
+                        },
+                    )
+                }
+                composable<MyListRoute> {
+                    MyListScreen(
+                        onOpen = { (id, _, _, _, _, _, _, _, _) ->
+                            navController.navigateDebounced(DetailsRoute(id.toRouteToken()))
+                        },
+                    )
+                }
+                // Detail screens share the global transitions above.
+                composable<DetailsRoute> {
+                    DetailsScreen(
+                        onBack = { navController.popSafely() },
+                        onPlay = { (mediaKey, contentKey, title, posterUrl, episodeLabel, year, headers) ->
+                            navController.navigateDebounced(
+                                PlayerRoute(
+                                    mediaKey = mediaKey.toRouteToken(),
+                                    contentKey = contentKey.toRouteToken(),
+                                    title = title,
+                                    posterUrl = posterUrl ?: "",
+                                    episodeLabel = episodeLabel ?: "",
+                                    year = year ?: 0,
+                                    headers = runCatching { Json.encodeToString(headers) }.getOrDefault(""),
+                                ),
+                            )
+                        },
+                    )
+                }
+                composable<PlayerRoute>(
+                    enterTransition = {
+                        // Opens as a vertical modal rise; back slides out like any other page.
+                        slideInVertically(Motion.PlayerSlide) { it } + fadeIn(Motion.PlayerFade)
                     },
-                )
-            }
-            composable<SettingsRoute> {
-                SettingsScreen(
-                    onOpenHistory = { navController.navigateDebounced(HistoryRoute) },
-                )
-            }
-            composable<HistoryRoute> {
-                HistoryScreen(
-                    onBack = { navController.popSafely() },
-                    onOpen = { key ->
-                        navController.navigateDebounced(DetailsRoute(key.toRouteToken()))
-                    },
-                )
+                ) {
+                    PlayerScreen(
+                        onBack = { navController.popSafely() },
+                        // The destination's own enter/exit transition; PlayerScreen restores
+                        // orientation/system bars the moment its exit starts (N7).
+                        navTransition = transition,
+                    )
+                }
+                composable<SeeAllRoute> { entry ->
+                    val (routeShelfId) = entry.toRoute<SeeAllRoute>()
+                    SeeAllScreen(
+                        shelfId = routeShelfId.fromRouteToken(),
+                        onBack = { navController.popSafely() },
+                        onOpen = { (id, _, _, _, _, _, _, _, _) ->
+                            navController.navigateDebounced(DetailsRoute(id.toRouteToken()))
+                        },
+                    )
+                }
+                composable<SettingsRoute> {
+                    SettingsScreen(
+                        onOpenHistory = { navController.navigateDebounced(HistoryRoute) },
+                    )
+                }
+                composable<HistoryRoute> {
+                    HistoryScreen(
+                        onBack = { navController.popSafely() },
+                        onOpen = { key ->
+                            navController.navigateDebounced(DetailsRoute(key.toRouteToken()))
+                        },
+                    )
+                }
             }
         }
     }

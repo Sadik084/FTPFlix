@@ -1,5 +1,6 @@
 package com.ftpflix.ui.library
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -73,7 +74,12 @@ fun LibraryScreen(
         if (nearEnd) vm.loadMore()
     }
 
-    Column(Modifier.fillMaxSize().statusBarsPadding()) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .statusBarsPadding(),
+    ) {
         SingleSelectSegmentedRow(
             options = LibraryTab.entries.map { it.name },
             selectedIndex = LibraryTab.entries.indexOf(tab).coerceAtLeast(0),

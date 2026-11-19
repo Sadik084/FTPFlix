@@ -327,12 +327,17 @@ fun PlayerScreen(
         }
 
         // Media3 only decodes subtitle cues; something has to draw them.
+        val subtitleBottomPadding by animateDpAsState(
+            targetValue = if (controlsVisible && !ui.locked) 170.dp else 48.dp,
+            animationSpec = tween(180),
+            label = "subtitleBottomPadding",
+        )
         SubtitleOverlay(
             player = vm.player,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 // Sit above the control bar so cues stay readable.
-                .padding(bottom = if (controlsVisible && !ui.locked) 170.dp else 48.dp)
+                .padding(bottom = subtitleBottomPadding)
                 .fillMaxWidth(0.86f)
         )
 
@@ -438,7 +443,11 @@ fun PlayerScreen(
             ErrorState(ui.error!!, onRetry = vm::retryPlayback, modifier = Modifier.align(Alignment.Center))
         }
 
-        if (controlsVisible && !ui.locked && ui.error == null) {
+        AnimatedVisibility(
+            visible = controlsVisible && !ui.locked && ui.error == null,
+            enter = fadeIn(tween(180)),
+            exit = fadeOut(tween(180)),
+        ) {
             Column(Modifier.fillMaxSize()) {
                 Row(
                     Modifier
@@ -629,9 +638,15 @@ fun PlayerScreen(
             }
         }
 
-        openPanel?.let { panel ->
+        var lastPanel by remember { mutableStateOf<Panel?>(null) }
+        if (openPanel != null) {
+            lastPanel = openPanel
+        }
+        val activePanel = openPanel ?: lastPanel
+        if (activePanel != null) {
             PlayerSidePanel(
-                title = when (panel) {
+                visible = openPanel != null,
+                title = when (activePanel) {
                     Panel.Audio -> "Audio"
                     Panel.Subs -> "Subtitles"
                     Panel.Episodes -> "Episodes"
@@ -641,7 +656,7 @@ fun PlayerScreen(
                 },
                 onDismiss = { openPanel = null }
             ) {
-                when (panel) {
+                when (activePanel) {
                     Panel.Audio -> TrackPanelContent(vm)
                     Panel.Subs -> SubsPanelContent(vm)
                     Panel.Info -> InfoPanelContent(ui = ui, stats = stats, progress = progress)
@@ -1424,20 +1439,27 @@ private fun InfoRow(label: String, value: String) {
 
 @Composable
 private fun BoxScope.PlayerSidePanel(
+    visible: Boolean,
     title: String,
     onDismiss: () -> Unit,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.5f))
-            .pointerInput(Unit) { detectTapGestures { onDismiss() } }
-    )
     AnimatedVisibility(
-        visible = true,
-        enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
-        exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut(),
+        visible = visible,
+        enter = fadeIn(tween(200)),
+        exit = fadeOut(tween(200)),
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.5f))
+                .pointerInput(Unit) { detectTapGestures { onDismiss() } }
+        )
+    }
+    AnimatedVisibility(
+        visible = visible,
+        enter = slideInHorizontally(tween(220)) { it } + fadeIn(tween(220)),
+        exit = slideOutHorizontally(tween(220)) { it } + fadeOut(tween(220)),
         modifier = Modifier.align(Alignment.CenterEnd)
     ) {
         Column(
