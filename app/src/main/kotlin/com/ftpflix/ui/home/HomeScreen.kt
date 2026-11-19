@@ -110,9 +110,9 @@ fun HomeScreen(
             exit = slideOutVertically { it } + fadeOut(),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 96.dp),
+                .padding(bottom = 72.dp),
         ) {
-            OfflineBanner()
+            OfflineBanner(onRefresh = vm::refresh)
         }
 
         // Scrim fades in as the hero scrolls under the header.
