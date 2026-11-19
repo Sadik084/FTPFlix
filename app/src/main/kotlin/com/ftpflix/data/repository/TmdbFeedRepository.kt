@@ -38,6 +38,7 @@ class TmdbFeedRepository @Inject constructor(
         return System.currentTimeMillis() - lastRefreshedAt() > staleTtlMs
     }
 
+
     // Random page/sort per refresh so the feed varies; unreleased titles dropped.
     suspend fun refresh() = withContext(Dispatchers.IO) {
         val today = LocalDate.now().toString()
@@ -79,6 +80,7 @@ class TmdbFeedRepository @Inject constructor(
 
             fun add(shelfId: String, m: TmdbMovie) {
                 if (!isReleased(m.releaseDate)) return
+                if (m.voteCount < MIN_MOVIE_VOTES) return
                 val title = m.title.ifBlank { m.name }
                 if (title.isBlank()) return
                 items += FeedItemEntity(
@@ -98,6 +100,7 @@ class TmdbFeedRepository @Inject constructor(
 
             fun addSeries(shelfId: String, m: TmdbMovie) {
                 if (!isReleased(m.firstAirDate)) return
+                if (m.voteCount < MIN_TV_VOTES) return
                 val title = m.name.ifBlank { m.title }
                 if (title.isBlank()) return
                 items += FeedItemEntity(
@@ -130,4 +133,10 @@ class TmdbFeedRepository @Inject constructor(
         }
     }
 
+    companion object {
+        // Vote count thresholds: movies need more votes to be considered reliable
+        // TMDB vote_count below these often indicates obscure/unreleased/user-generated entries
+        private const val MIN_MOVIE_VOTES = 50
+        private const val MIN_TV_VOTES = 30
+    }
 }
