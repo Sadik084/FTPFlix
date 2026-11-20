@@ -170,7 +170,8 @@ fun SearchScreen(
 
         Spacer(Modifier.height(Spacing.md))
 
-        val showResults = query.trim().length >= 2 || filters.hasActiveFilters
+        // Results only appear for a query; filters refine them but never act as a standalone browse.
+        val showResults = query.trim().length >= 2
         val error = status.error
         when {
             !showResults -> {

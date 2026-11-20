@@ -152,7 +152,8 @@ class SearchViewModel @Inject constructor(
     ) { q, f, _ -> q to f }
         .flatMapLatest { (q, filters) ->
             val trimmed = q.trim()
-            if (trimmed.length < 2 && !filters.hasActiveFilters) {
+            // Search requires a query; filters only refine its results.
+            if (trimmed.length < 2) {
                 flowOf(emptyList<CatalogEntry>()).onStart { _status.value = SearchStatus() }
             } else {
                 flow {
@@ -268,11 +269,6 @@ class SearchViewModel @Inject constructor(
 
     private suspend fun search(q: String, filters: SearchFilters): List<CatalogEntry> {
         val query = q.trim()
-        if (query.length < 2) {
-            // No text query: browse the catalogue with the active filters.
-            return applyFilter(discoverCandidates(filters), filters)
-        }
-
         val (base, year) = splitTitleYear(query)
         val direct = candidatesFor(base, year, filters)
         val directFiltered = applyFilter(direct, filters)
@@ -320,10 +316,6 @@ class SearchViewModel @Inject constructor(
             .sortedByDescending { it.second }
             .map { it.first }
     }
-
-    // Browse by filters only; the repository routes this to TMDB's discover endpoint.
-    private suspend fun discoverCandidates(filters: SearchFilters): List<CatalogEntry> =
-        candidatesFor("", null, filters)
 
     private suspend fun candidatesFor(query: String, year: Int?, filters: SearchFilters): List<CatalogEntry> {
         val parsed = ParsedName(
