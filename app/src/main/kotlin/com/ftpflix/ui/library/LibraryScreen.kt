@@ -97,8 +97,8 @@ fun LibraryScreen(
             Box(Modifier.height(Spacing.md))
         }
 
-        // Show skeletons during initial load or pull-to-refresh
-        val showSkeletons = (items.isEmpty() && initialLoading) || isRefreshing
+        // Skeletons only while there is nothing to show; a refresh keeps the current titles.
+        val showSkeletons = items.isEmpty() && initialLoading
 
         PullToRefreshBox(
             isRefreshing = isRefreshing,

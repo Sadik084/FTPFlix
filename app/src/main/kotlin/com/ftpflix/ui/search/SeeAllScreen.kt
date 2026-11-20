@@ -23,6 +23,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -35,6 +36,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ftpflix.data.model.CatalogEntry
 import com.ftpflix.domain.feed.shelfTitle
+import com.ftpflix.ui.components.ErrorState
 import com.ftpflix.ui.components.PosterCard
 import com.ftpflix.ui.theme.Spacing
 
@@ -50,6 +52,7 @@ fun SeeAllScreen(
     val items by vm.items.collectAsStateWithLifecycle()
     val loadingMore by vm.loadingMore.collectAsStateWithLifecycle()
     val initialLoading by vm.initialLoading.collectAsStateWithLifecycle()
+    val error by vm.error.collectAsStateWithLifecycle()
     val ageRatings by vm.ageRatings.collectAsStateWithLifecycle()
     val gridState = rememberLazyGridState()
 
@@ -84,6 +87,13 @@ fun SeeAllScreen(
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp)
                 }
+            }
+            (items.isEmpty()) && (error != null) -> {
+                ErrorState(
+                    message = error.orEmpty(),
+                    onRetry = vm::retry,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
             items.isEmpty() -> {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -126,6 +136,24 @@ fun SeeAllScreen(
                                     Modifier.size(24.dp),
                                     strokeWidth = 2.dp
                                 )
+                            }
+                        }
+                    }
+                    if ((error != null) && !loadingMore) {
+                        item(key = "error-more", span = { GridItemSpan(maxLineSpan) }) {
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = Spacing.sm),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    error.orEmpty(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                TextButton(onClick = vm::retry) { Text("Retry") }
                             }
                         }
                     }

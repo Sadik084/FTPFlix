@@ -15,8 +15,7 @@ import com.ftpflix.data.repository.FeedRepository
 import com.ftpflix.ui.navigation.SeeAllRoute
 import androidx.navigation.toRoute
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -53,10 +52,14 @@ class SeeAllViewModel @Inject constructor(
     private val _initialLoading = MutableStateFlow(value = true)
     val initialLoading: StateFlow<Boolean> = _initialLoading.asStateFlow()
 
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error.asStateFlow()
+
     private var page = 0
     private var totalPages = Int.MAX_VALUE
     private var genreId: Int? = null
-    private var genreKind = "movie"
+    /** TMDB media type for genre shelves: "movie" or "tv". */
+    private var genreTmdbKind = "movie"
     private val seenIds = mutableSetOf<String>()
 
     init {
@@ -74,20 +77,31 @@ class SeeAllViewModel @Inject constructor(
     // Appends the next page; no-op while one is in flight or done.
     fun loadMore() {
         if (_loadingMore.value || _initialLoading.value || (page >= totalPages)) return
+        // Wait for an explicit retry instead of hammering a failing endpoint on every scroll.
+        if (_error.value != null) return
         _loadingMore.value = true
         viewModelScope.launch {
             try {
                 fetchNextPage()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _error.value = "Couldn't load more titles. Check your connection."
             } finally {
                 _loadingMore.value = false
             }
         }
     }
 
+    /** Retries the failed page load. */
+    fun retry() {
+        _error.value = null
+        loadMore()
+    }
+
     private suspend fun fetchNextPage() {
         val next = page + 1
-        val (_, results, responseTotalPages, _) = runCatching { fetchPage(next) }.getOrNull()
-            ?: return // retry on next scroll
+        val (_, results, responseTotalPages, _) = fetchPage(next)
         page = next
         totalPages = responseTotalPages.coerceAtLeast(1)
         if (results.isEmpty()) {
@@ -117,31 +131,28 @@ class SeeAllViewModel @Inject constructor(
             "new" -> tmdb.discover("movie", apiKey, sortBy = "primary_release_date.desc", page = page, primaryReleaseDateLte = today)
             "new_tv" -> tmdb.discover("tv", apiKey, sortBy = "first_air_date.desc", page = page, firstAirDateLte = today)
             else -> tmdb.discover(
-                genreKind, apiKey,
+                genreTmdbKind, apiKey,
                 sortBy = "popularity.desc", withGenres = genreId?.toString(), page = page,
-                primaryReleaseDateLte = if (genreKind == "movie") today else null,
-                firstAirDateLte = if (genreKind == "tv") today else null,
+                primaryReleaseDateLte = if (genreTmdbKind == "movie") today else null,
+                firstAirDateLte = if (genreTmdbKind == "tv") today else null,
             )
         }
     }
 
-    // Resolve a genre name to its TMDB id and pick the dominant kind.
+    // Resolve a genre name to its TMDB id for the shelf's media type.
     private suspend fun setupGenre(name: String, seed: List<CatalogEntry>) {
+        val seriesHeavy = seed.count { it.kind == "series" } > seed.count { it.kind == "movie" }
+        genreTmdbKind = if (seriesHeavy) "tv" else "movie"
         genreId = runCatching {
-            coroutineScope {
-                val movies = async { runCatching { tmdb.movieGenres(apiKey).genres }.getOrDefault(emptyList()) }
-                val shows = async { runCatching { tmdb.tvGenres(apiKey).genres }.getOrDefault(emptyList()) }
-                (movies.await() + shows.await())
-                    .firstOrNull { it.name.equals(name, ignoreCase = true) }?.id
-            }
+            val genres = if (genreTmdbKind == "tv") tmdb.tvGenres(apiKey).genres
+            else tmdb.movieGenres(apiKey).genres
+            genres.firstOrNull { it.name.equals(name, ignoreCase = true) }?.id
         }.getOrNull()
-        genreKind = if (seed.count { it.kind == "series" } > seed.count { it.kind == "movie" })
-            "series" else "movie"
     }
 
     private fun shelfKind(): String = when (shelfId) {
         "trending_tv", "popular_tv", "new_tv" -> "series"
-        else -> if (shelfId.startsWith("genre_")) genreKind else "movie"
+        else -> if (shelfId.startsWith("genre_") && genreTmdbKind == "tv") "series" else "movie"
     }
 
     // Same shape as the feed mapper; unreleased titles dropped.

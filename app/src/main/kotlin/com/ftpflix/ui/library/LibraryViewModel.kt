@@ -95,6 +95,8 @@ class LibraryViewModel @Inject constructor(
     private val seenKeys = mutableSetOf<String>()
     private var loadJob: Job? = null
     private var genreMap: Map<String, GenreIds>? = null
+    /** Monotonic rank for paged titles so a reseed cannot reuse an existing rank. */
+    private var rankCounter = 0
 
     init {
         viewModelScope.launch {
@@ -138,6 +140,8 @@ class LibraryViewModel @Inject constructor(
     /** Appends the next discover page; no-op while a page is in flight or done. */
     fun loadMore() {
         if (_loadingMore.value || endReached || (page >= totalPages)) return
+        // Wait for an explicit retry instead of hammering a failing endpoint on every scroll.
+        if (_error.value != null) return
         if (loadJob?.isActive == true) return
         loadJob = viewModelScope.launch {
             _loadingMore.value = true
@@ -169,10 +173,11 @@ class LibraryViewModel @Inject constructor(
         seenKeys.clear()
         val seed = list.asSequence()
             .filter { it.inTab(tab) }
-            .filter { it.hasAnyGenre(selected) }
+            .filter { it.hasAllGenres(selected) }
             .distinctBy { it.entryKey() }
             .toList()
         seenKeys += seed.map { it.entryKey() }
+        rankCounter = maxOf(rankCounter, seed.size)
         _items.value = seed
         requestWarmup()
         _initialLoading.value = seed.isEmpty()
@@ -184,8 +189,8 @@ class LibraryViewModel @Inject constructor(
         val selected = _genres.value
         val genreIds = genreIdsFor(tab, selected)
         if (selected.isNotEmpty() && (genreIds == null)) {
-            // Genre id unknown (e.g. offline): the snapshot filter is all we can offer.
-            endReached = true
+            // Genre id unknown (e.g. offline): surface it instead of ending pagination forever.
+            _error.value = "Couldn't resolve the selected genres. Check your connection."
             return
         }
         val next = page + 1
@@ -202,9 +207,8 @@ class LibraryViewModel @Inject constructor(
         page = next
         totalPages = responseTotalPages.coerceAtLeast(1)
         if (results.isEmpty() || (page >= totalPages)) endReached = true
-        var rank = _items.value.size
         val fresh = results.asSequence()
-            .mapNotNull { it.toFeedItem(kind, today, rank++) }
+            .mapNotNull { it.toFeedItem(kind, today, rankCounter++) }
             .filter { seenKeys.add(it.entryKey()) }
             .toList()
         if (fresh.isNotEmpty()) {
@@ -217,10 +221,10 @@ class LibraryViewModel @Inject constructor(
 
     private fun FeedItemEntity.genreTokens(): List<String> = genres.split(',')
 
-    /** Empty selection = all; else require at least one selected genre (case-insensitive). */
-    private fun FeedItemEntity.hasAnyGenre(selected: Set<String>): Boolean =
-        selected.isEmpty() || genres.split(',').any { g ->
-            selected.any { it.equals(g.trim(), ignoreCase = true) }
+    /** Empty selection = all; else the title must carry every selected genre. */
+    private fun FeedItemEntity.hasAllGenres(selected: Set<String>): Boolean =
+        selected.isEmpty() || selected.all { sel ->
+            genres.split(',').any { g -> g.trim().equals(sel, ignoreCase = true) }
         }
 
     /** Resolves ids for all selected genres; null when any is unknown (offline). */
