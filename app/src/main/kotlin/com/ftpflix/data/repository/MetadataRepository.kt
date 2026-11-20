@@ -16,6 +16,7 @@ import com.ftpflix.domain.parser.ParsedName
 import com.ftpflix.ui.search.SearchFilters
 import com.ftpflix.ui.search.SearchSort
 import com.ftpflix.ui.search.SearchFilter
+import com.ftpflix.ui.search.SearchCertifications
 import com.ftpflix.data.remote.TmdbGenre
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -23,6 +24,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlin.time.Duration.Companion.seconds
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
@@ -39,6 +42,8 @@ data class TitleCandidate(
     val voteCount: Int = 0,
     val originalLanguage: String = "",
     val popularity: Double = 0.0,
+    /** Exact release / first-air date (ISO). */
+    val releaseDate: String? = null,
 )
 
 // Episode name + air date from TMDB.
@@ -201,6 +206,43 @@ class MetadataRepository @Inject constructor(
         return rating
     }
 
+    /** Certification per media id + country; avoids refetching on every search. */
+    private val certificationCache = ConcurrentHashMap<String, String>()
+
+    /**
+     * Certification for a specific country, falling back to the preferred-country value.
+     * Used to filter search results by age rating.
+     */
+    suspend fun certificationFor(mediaId: String, country: String): String? {
+        val cacheKey = "$mediaId|$country"
+        certificationCache[cacheKey]?.let { return it }
+        if (country == "US") {
+            metadataDao.get("tmdb", mediaId)?.ageRating?.takeIf { it.isNotBlank() }?.let {
+                certificationCache[cacheKey] = it
+                return it
+            }
+        }
+        val m = idPattern.matchEntire(mediaId) ?: return null
+        val id = m.groupValues[2].toLongOrNull() ?: return null
+        val kind = m.groupValues[1]
+        val rating = try {
+            withTimeout(8.seconds) {
+                if (kind == "tv") tmdb.tvContentRatings(id, apiKey).forCountry(country)
+                else tmdb.movieReleaseDates(id, apiKey).forCountry(country)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            breaker.failure("tmdb")
+            null
+        }
+        if (!rating.isNullOrBlank()) {
+            breaker.success("tmdb")
+            certificationCache[cacheKey] = rating
+        }
+        return rating
+    }
+
     private val genreCache = ConcurrentHashMap<String, List<TmdbGenre>>()
 
     suspend fun candidatesFor(parsed: ParsedName, filters: SearchFilters = SearchFilters.DEFAULT): List<TitleCandidate> {
@@ -209,96 +251,135 @@ class MetadataRepository @Inject constructor(
             return searchCandidates(parsed, filters)
         }
         // No text query: use discover endpoint for server-side filtering
-        return discoverCandidates(parsed, filters)
+        return discoverCandidates(filters)
     }
 
     private suspend fun searchCandidates(parsed: ParsedName, filters: SearchFilters): List<TitleCandidate> {
-        val (movies, tv) = coroutineScope {
-            val m = async(Dispatchers.IO) {
-                runCatching { tmdb.searchMovie(apiKey, parsed.title, parsed.year).results.map { it.toCandidate("movie") } }
-                    .getOrDefault(emptyList())
-            }
-            val t = async(Dispatchers.IO) {
-                runCatching { tmdb.searchTv(apiKey, parsed.title, parsed.year).results.map { it.toCandidate("tv") } }
-                    .getOrDefault(emptyList())
-            }
-            m.await() to t.await()
-        }
-        val query = parsed.title
-        var out = (movies + tv)
-            .distinctBy { it.imdbId }
-        // Client-side filter for genres, rating, language (now available in TitleCandidate)
-        if (filters.genres.isNotEmpty()) {
-            out = out.filter { candidate ->
-                filters.genres.all { genreId -> genreId in candidate.genreIds }
-            }
-        }
-        if (filters.minRating > 0) {
-            out = out.filter { it.voteAverage >= filters.minRating }
-        }
-        if (filters.languages.isNotEmpty()) {
-            out = out.filter { candidate -> candidate.originalLanguage in filters.languages }
-        }
-        out = out
-            .map { candidate ->
-                val score = com.ftpflix.util.TitleMatchingUtils.calculateSimilarityScore(query, candidate.title)
-                candidate to score
-            }
-            .sortedByDescending { it.second }
-            .map { it.first }
-        return out
-    }
-
-    private suspend fun discoverCandidates(parsed: ParsedName, filters: SearchFilters): List<TitleCandidate> {
         val kinds = when (filters.type) {
             SearchFilter.All -> listOf("movie", "tv")
             SearchFilter.Movies -> listOf("movie")
             SearchFilter.Series -> listOf("tv")
-            else -> listOf("movie", "tv")
         }
-        
-        val sortBy = when (filters.sortBy) {
-            SearchSort.Popularity -> "popularity.desc"
-            SearchSort.Rating -> "vote_average.desc"
-            SearchSort.ReleaseDate -> "primary_release_date.desc"
-            SearchSort.Title -> "original_title.asc"
-            else -> "popularity.desc" // Relevance not supported by discover, default to popularity
-        }
-        
-        val genreParam = filters.genres.joinToString(",").takeIf { it.isNotBlank() }
-        val languageParam = filters.languages.joinToString(",").takeIf { it.isNotBlank() }
-        val minRating = filters.minRating.takeIf { it > 0 }
-        val certification = filters.certification?.takeIf { it.isNotBlank() }
-        val certificationCountry = filters.certificationCountry.takeIf { it.isNotBlank() }
-        
-        val yearGte = filters.yearFrom?.let { "$it-01-01" }
-        val yearLte = filters.yearTo?.let { "$it-12-31" }
-        
+        // Filters are applied client-side, so pull an extra page when they are active.
+        val pages = if (filters.hasContentFilters) SEARCH_PAGES_FILTERED else 1
         val results = coroutineScope {
-            kinds.map { kind ->
-                async(Dispatchers.IO) {
-                    runCatching {
-                        tmdb.discover(
-                            kind = kind,
-                            apiKey = apiKey,
-                            sortBy = sortBy,
-                            withGenres = genreParam,
-                            voteAverageGte = minRating,
-                            withOriginalLanguage = languageParam,
-                            primaryReleaseDateGte = if (kind == "movie") yearGte else null,
-                            primaryReleaseDateLte = if (kind == "movie") yearLte else null,
-                            firstAirDateGte = if (kind == "tv") yearGte else null,
-                            firstAirDateLte = if (kind == "tv") yearLte else null,
-                            certification = certification,
-                            certificationCountry = certificationCountry,
-                        ).results.map { it.toCandidate(kind) }
-                    }.getOrDefault(emptyList())
+            kinds.flatMap { kind ->
+                (1..pages).map { page ->
+                    async(Dispatchers.IO) {
+                        runCatching {
+                            when (kind) {
+                                "movie" -> tmdb.searchMovie(apiKey, parsed.title, parsed.year, page = page)
+                                    .results.map { it.toCandidate("movie") }
+
+                                else -> tmdb.searchTv(apiKey, parsed.title, parsed.year, page = page)
+                                    .results.map { it.toCandidate("tv") }
+                            }
+                        }.getOrDefault(emptyList())
+                    }
                 }
             }.awaitAll()
         }
-        
-        val out = results.flatten().distinctBy { it.imdbId }
-        return out
+        val pool = results.flatten().distinctBy { it.imdbId }
+        val rated = applyCertification(pool, filters)
+        // Rank by title similarity; the client applies the remaining filters.
+        val query = parsed.title
+        return rated.map { candidate ->
+            candidate to com.ftpflix.util.TitleMatchingUtils.calculateSimilarityScore(query, candidate.title)
+        }
+            .sortedByDescending { it.second }
+            .map { it.first }
+    }
+
+    /**
+     * Keeps only candidates whose certification is one of the selected ratings.
+     * TMDB's search endpoint cannot filter by certification, so it is resolved per title.
+     */
+    private suspend fun applyCertification(
+        candidates: List<TitleCandidate>,
+        filters: SearchFilters,
+    ): List<TitleCandidate> {
+        val wanted = filters.certification
+        if (wanted.isEmpty() || candidates.isEmpty()) return candidates
+        val country = filters.certificationCountry
+        val scoped = candidates.take(MAX_CERT_LOOKUPS)
+        return coroutineScope {
+            val semaphore = Semaphore(CERT_CONCURRENCY)
+            val ratings = scoped.map { candidate ->
+                async(Dispatchers.IO) {
+                    semaphore.withPermit { certificationFor(candidate.imdbId, country) }
+                }
+            }.awaitAll()
+            scoped.zip(ratings)
+                .filter { (_, cert) -> cert != null && cert in wanted }
+                .map { it.first }
+        }
+    }
+
+    private suspend fun discoverCandidates(filters: SearchFilters): List<TitleCandidate> {
+        val kinds = when (filters.type) {
+            SearchFilter.All -> listOf("movie", "tv")
+            SearchFilter.Movies -> listOf("movie")
+            SearchFilter.Series -> listOf("tv")
+        }
+        val country = filters.certificationCountry
+        val selected = filters.certification
+        // A kind is only browsable when one of the selected ratings belongs to it.
+        val browsableKinds = kinds.filter { kind ->
+            selected.isEmpty() || certsFor(kind, country).any { it in selected }
+        }
+
+        val genreParam = filters.genres.joinToString(",").takeIf { it.isNotBlank() }
+        val languageParam = filters.languages.joinToString(",").takeIf { it.isNotBlank() }
+        val minRating = filters.minRating.takeIf { it > 0 }
+
+        val yearGte = filters.yearFrom?.let { "$it-01-01" }
+        val yearLte = filters.yearTo?.let { "$it-12-31" }
+
+        val results = coroutineScope {
+            browsableKinds.flatMap { kind ->
+                val certs = if (selected.isEmpty()) {
+                    listOf<String?>(null)
+                } else {
+                    certsFor(kind, country).filter { it in selected }.map { it as String? }
+                }
+                certs.map { cert ->
+                    async(Dispatchers.IO) {
+                        runCatching {
+                            tmdb.discover(
+                                kind = kind,
+                                apiKey = apiKey,
+                                sortBy = discoverSortFor(kind, filters.sortBy),
+                                withGenres = genreParam,
+                                voteAverageGte = minRating,
+                                withOriginalLanguage = languageParam,
+                                primaryReleaseDateGte = if (kind == "movie") yearGte else null,
+                                primaryReleaseDateLte = if (kind == "movie") yearLte else null,
+                                firstAirDateGte = if (kind == "tv") yearGte else null,
+                                firstAirDateLte = if (kind == "tv") yearLte else null,
+                                certification = cert,
+                                certificationCountry = if (cert != null) country else null,
+                            ).results.map { it.toCandidate(kind) }
+                        }.getOrDefault(emptyList())
+                    }
+                }
+            }.awaitAll()
+        }
+
+        return results.flatten().distinctBy { it.imdbId }
+    }
+
+    /** Certification values that apply to a media kind in the given country. */
+    private fun certsFor(kind: String, country: String): List<String> =
+        if (kind == "movie") SearchCertifications.movieCerts(country)
+        else SearchCertifications.tvCerts(country)
+
+    /** TMDB sort keys differ between movies and TV. */
+    private fun discoverSortFor(kind: String, sort: SearchSort): String = when (sort) {
+        SearchSort.Popularity -> "popularity.desc"
+        SearchSort.Rating -> "vote_average.desc"
+        SearchSort.ReleaseDate -> if (kind == "movie") "primary_release_date.desc" else "first_air_date.desc"
+        SearchSort.Title -> if (kind == "movie") "original_title.asc" else "original_name.asc"
+        SearchSort.Relevance -> "popularity.desc"
     }
 
     /** Fetch genre lists from TMDB (cached) */
@@ -327,10 +408,12 @@ class MetadataRepository @Inject constructor(
         metadataDao.clear()
     }
 
+    // TMDB returns movie and TV payloads through one discover endpoint; TV rows carry
+    // "name"/"first_air_date" instead of "title"/"release_date".
     private fun TmdbMovie.toCandidate(kind: String) = TitleCandidate(
         imdbId = "$kind:$id",
-        title = title,
-        year = releaseDate?.take(4)?.toIntOrNull(),
+        title = title.ifBlank { name },
+        year = (releaseDate ?: firstAirDate)?.take(4)?.toIntOrNull(),
         posterUrl = posterPath?.let { imageUrl(it, "w500") },
         actors = null,
         genreIds = genreIds,
@@ -338,6 +421,7 @@ class MetadataRepository @Inject constructor(
         voteCount = voteCount,
         originalLanguage = originalLanguage,
         popularity = popularity,
+        releaseDate = releaseDate ?: firstAirDate,
     )
 
     private fun TmdbTv.toCandidate(kind: String) = TitleCandidate(
@@ -349,8 +433,9 @@ class MetadataRepository @Inject constructor(
         genreIds = genreIds,
         voteAverage = voteAverage,
         voteCount = voteCount,
-        originalLanguage = "",
+        originalLanguage = originalLanguage,
         popularity = popularity,
+        releaseDate = firstAirDate,
     )
 
     private fun toMetadata(any: Any, mediaId: String): MovieMetadata? = when (any) {
@@ -415,6 +500,23 @@ private fun TmdbReleaseDates?.certification(): String? {
         .firstOrNull { validCert(it) }
 }
 
+/** Certification for a specific country; falls back to the preferred-country value. */
+private fun TmdbReleaseDates?.forCountry(country: String): String? {
+    val results = this?.results.orEmpty()
+    results.firstOrNull { it.country == country }
+        ?.releaseDates?.asSequence()
+        ?.map { it.certification }
+        ?.firstOrNull { validCert(it) }
+        ?.let { return it }
+    return certification()
+}
+
+private fun TmdbContentRatings?.forCountry(country: String): String? {
+    val results = this?.results.orEmpty()
+    results.firstOrNull { it.country == country }?.rating?.takeIf { validCert(it) }?.let { return it }
+    return rating()
+}
+
 private fun TmdbContentRatings?.rating(): String? {
     val results = this?.results.orEmpty()
     val byCountry = results.associateBy { it.country }
@@ -444,6 +546,13 @@ class ProviderCircuitBreaker @Inject constructor() {
         }
     }
 }
+
+// Extra TMDB pages fetched when client-side filters narrow the candidate pool.
+private const val SEARCH_PAGES_FILTERED = 2
+// Titles checked for an age rating when filtering by certification.
+private const val MAX_CERT_LOOKUPS = 40
+// Concurrent certification lookups.
+private const val CERT_CONCURRENCY = 6
 
 private const val CARD_TTL_MS = 30L * 24 * 60 * 60 * 1000
 private const val NEGATIVE_CACHE_MS = 6L * 60 * 60 * 1000

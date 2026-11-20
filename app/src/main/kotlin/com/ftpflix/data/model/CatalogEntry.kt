@@ -17,6 +17,8 @@ data class CatalogEntry(
     val genreIds: List<Int> = emptyList(),
     val voteAverage: Double = 0.0,
     val originalLanguage: String = "",
+    /** Exact release / first-air date (ISO). Null when TMDB has no date. */
+    val releaseDate: String? = null,
 ) {
     val matchKey: String get() = "$id"
 }

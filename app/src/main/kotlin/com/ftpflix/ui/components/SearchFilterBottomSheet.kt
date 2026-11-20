@@ -42,11 +42,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
+import com.ftpflix.ui.search.SearchCertifications
 import com.ftpflix.ui.search.SearchFilter
 import com.ftpflix.ui.search.SearchFilters
 import com.ftpflix.ui.search.SearchSort
 import com.ftpflix.ui.theme.FtpTypography
 import com.ftpflix.ui.theme.Spacing
+import java.util.Calendar
 
 /** ISO 639-1 -> English label pairs shown in the language picker. */
 private val LANGUAGE_OPTIONS = listOf(
@@ -63,14 +65,14 @@ private val LANGUAGE_OPTIONS = listOf(
     "te" to "Telugu",
 )
 
-/** Movie certification options (US ratings). */
-private val MOVIE_CERTIFICATIONS = listOf("G", "PG", "PG-13", "R", "NC-17")
-
-/** TV certification options (US ratings). */
-private val TV_CERTIFICATIONS = listOf("TV-Y", "TV-G", "TV-PG", "TV-14", "TV-MA")
-
 /** Preset minimum-rating options; empty string means no rating filter. */
 private val RATING_OPTIONS = listOf("", "7.0", "8.0", "9.0")
+
+/** Oldest year accepted by the year-range filter. */
+private const val MIN_YEAR = 1870
+
+/** Latest year accepted by the year-range filter (a few years ahead for upcoming titles). */
+private val MAX_YEAR: Int = Calendar.getInstance().get(Calendar.YEAR) + 3
 
 private fun ratingLabel(value: String): String =
     if (value.isEmpty()) "Any rating" else "★ $value+"
@@ -102,23 +104,41 @@ fun SearchFilterBottomSheet(
     var yearTo by remember(filters.yearTo) { mutableStateOf(filters.yearTo?.toString() ?: "") }
     var minRating by remember(filters.minRating) { mutableStateOf(filters.minRating.takeIf { it > 0 }?.toString() ?: "") }
     var sortBy by remember(filters.sortBy) { mutableStateOf(filters.sortBy) }
-    var certification by remember(filters.certification) { mutableStateOf(filters.certification ?: "") }
+    var certifications by remember(filters.certification) { mutableStateOf(filters.certification) }
     var certificationCountry by remember(filters.certificationCountry) { mutableStateOf(filters.certificationCountry) }
+    var yearError by remember { mutableStateOf<String?>(null) }
 
-    fun commit() {
+    // Returns false when the draft is invalid; the sheet then stays open.
+    fun commit(): Boolean {
+        val from = yearFrom.toIntOrNull()
+        val to = yearTo.toIntOrNull()
+        if (from != null && (from < MIN_YEAR || from > MAX_YEAR)) {
+            yearError = "Year must be between $MIN_YEAR and $MAX_YEAR"
+            return false
+        }
+        if (to != null && (to < MIN_YEAR || to > MAX_YEAR)) {
+            yearError = "Year must be between $MIN_YEAR and $MAX_YEAR"
+            return false
+        }
+        if (from != null && to != null && from > to) {
+            yearError = "“From” year must not be after “To” year"
+            return false
+        }
+        yearError = null
         onApply(
             SearchFilters(
                 type = type,
                 genres = selectedGenreIds,
                 languages = selectedLanguages,
-                yearFrom = yearFrom.toIntOrNull(),
-                yearTo = yearTo.toIntOrNull(),
+                yearFrom = from,
+                yearTo = to,
                 minRating = minRating.toDoubleOrNull() ?: 0.0,
                 sortBy = sortBy,
-                certification = certification.takeIf { it.isNotBlank() },
+                certification = certifications,
                 certificationCountry = certificationCountry,
             )
         )
+        return true
     }
 
     fun resetAll() {
@@ -129,8 +149,13 @@ fun SearchFilterBottomSheet(
         yearTo = ""
         minRating = ""
         sortBy = SearchSort.Relevance
-        certification = ""
+        certifications = emptySet()
         certificationCountry = "US"
+        yearError = null
+    }
+
+    fun toggleCertification(cert: String) {
+        certifications = if (cert in certifications) certifications - cert else certifications + cert
     }
 
     ModalBottomSheet(
@@ -159,8 +184,7 @@ fun SearchFilterBottomSheet(
                 }
                 Button(
                     onClick = {
-                        commit()
-                        onDismiss()
+                        if (commit()) onDismiss()
                     },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.primary,
@@ -253,22 +277,37 @@ fun SearchFilterBottomSheet(
                 }
 
                 FilterSection("Year Range") {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        YearField(
-                            label = "From",
-                            value = yearFrom,
-                            onValueChange = { yearFrom = it },
-                            modifier = Modifier.weight(1f),
-                        )
-                        YearField(
-                            label = "To",
-                            value = yearTo,
-                            onValueChange = { yearTo = it },
-                            modifier = Modifier.weight(1f),
-                        )
+                    Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            YearField(
+                                label = "From",
+                                value = yearFrom,
+                                onValueChange = {
+                                    yearFrom = it
+                                    yearError = null
+                                },
+                                modifier = Modifier.weight(1f),
+                            )
+                            YearField(
+                                label = "To",
+                                value = yearTo,
+                                onValueChange = {
+                                    yearTo = it
+                                    yearError = null
+                                },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        yearError?.let { message ->
+                            Text(
+                                text = message,
+                                style = FtpTypography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
                     }
                 }
 
@@ -287,9 +326,37 @@ fun SearchFilterBottomSheet(
                     }
                 }
 
+                FilterSection("Age Rating Country") {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    ) {
+                        SearchCertifications.COUNTRIES.forEach { country ->
+                            FilterChip(
+                                selected = certificationCountry == country.code,
+                                onClick = {
+                                    certificationCountry = country.code
+                                    // Rating codes differ per country, so start over.
+                                    certifications = emptySet()
+                                },
+                                label = { Text(country.label, style = FtpTypography.labelMedium) },
+                            )
+                        }
+                    }
+                }
+
                 FilterSection("Age Rating") {
                     Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                        // Movie certifications
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                        ) {
+                            FilterChip(
+                                selected = certifications.isEmpty(),
+                                onClick = { certifications = emptySet() },
+                                label = { Text("Any", style = FtpTypography.labelMedium) },
+                            )
+                        }
                         Text(
                             text = "Movies",
                             style = FtpTypography.bodySmall,
@@ -299,22 +366,28 @@ fun SearchFilterBottomSheet(
                             horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                             verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                         ) {
-                            FilterChip(
-                                selected = certification.isEmpty(),
-                                onClick = { certification = "" },
-                                label = { Text("Any", style = FtpTypography.labelMedium) },
-                            )
-                            MOVIE_CERTIFICATIONS.forEach { cert ->
+                            SearchCertifications.movieCerts(certificationCountry).forEach { cert ->
+                                val selected = cert in certifications
                                 FilterChip(
-                                    selected = certification == cert,
-                                    onClick = { certification = cert },
+                                    selected = selected,
+                                    onClick = { toggleCertification(cert) },
                                     label = { Text(cert, style = FtpTypography.labelMedium) },
+                                    leadingIcon = if (selected) {
+                                        {
+                                            Icon(
+                                                Icons.Rounded.Check,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(FilterChipDefaults.IconSize),
+                                            )
+                                        }
+                                    } else {
+                                        null
+                                    },
                                 )
                             }
                         }
-                        // TV certifications
                         Text(
-                            text = "TV",
+                            text = "Series",
                             style = FtpTypography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -322,16 +395,23 @@ fun SearchFilterBottomSheet(
                             horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                             verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                         ) {
-                            FilterChip(
-                                selected = certification.isEmpty(),
-                                onClick = { certification = "" },
-                                label = { Text("Any", style = FtpTypography.labelMedium) },
-                            )
-                            TV_CERTIFICATIONS.forEach { cert ->
+                            SearchCertifications.tvCerts(certificationCountry).forEach { cert ->
+                                val selected = cert in certifications
                                 FilterChip(
-                                    selected = certification == cert,
-                                    onClick = { certification = cert },
+                                    selected = selected,
+                                    onClick = { toggleCertification(cert) },
                                     label = { Text(cert, style = FtpTypography.labelMedium) },
+                                    leadingIcon = if (selected) {
+                                        {
+                                            Icon(
+                                                Icons.Rounded.Check,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(FilterChipDefaults.IconSize),
+                                            )
+                                        }
+                                    } else {
+                                        null
+                                    },
                                 )
                             }
                         }

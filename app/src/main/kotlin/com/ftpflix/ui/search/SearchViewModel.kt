@@ -47,8 +47,8 @@ data class SearchFilters(
     val minRating: Double = 0.0,                 // Minimum vote_average
     val languages: Set<String> = emptySet(),     // ISO 639-1 codes (en, es, etc.)
     val sortBy: SearchSort = SearchSort.Relevance,
-    val certification: String? = null,           // e.g. "PG-13", "R", "TV-MA"
-    val certificationCountry: String = "US",    // Certification country code
+    val certification: Set<String> = emptySet(), // e.g. {"PG-13", "TV-MA"}
+    val certificationCountry: String = "US",     // Certification country code
 ) {
     companion object {
         val DEFAULT = SearchFilters()
@@ -56,7 +56,19 @@ data class SearchFilters(
 
     /** Whether any filter beyond the default type is active */
     val hasActiveFilters: Boolean
-        get() = genres.isNotEmpty() || yearFrom != null || yearTo != null || minRating > 0 || languages.isNotEmpty() || sortBy != SearchSort.Relevance || certification != null
+        get() = hasContentFilters || sortBy != SearchSort.Relevance
+
+    /** Filters that narrow the candidate pool (need extra pages or server-side work). */
+    val hasContentFilters: Boolean
+        get() = genres.isNotEmpty() || yearFrom != null || yearTo != null ||
+            minRating > 0 || languages.isNotEmpty() || certification.isNotEmpty()
+}
+
+/** Catalog kind ("movie"/"series") a type filter maps to; null means "all kinds". */
+internal fun SearchFilter.catalogKind(): String? = when (this) {
+    SearchFilter.All -> null
+    SearchFilter.Movies -> "movie"
+    SearchFilter.Series -> "series"
 }
 
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
@@ -107,12 +119,13 @@ class SearchViewModel @Inject constructor(
     ) { q, f -> q to f }
         .flatMapLatest { (q, filters) ->
             flow {
-                if (q.trim().length < 2) {
+                val trimmed = q.trim()
+                if (trimmed.length < 2 && !filters.hasActiveFilters) {
                     emit(emptyList())
                 } else {
                     _searching.value = true
                     try {
-                        val list = search(q, filters)
+                        val list = search(trimmed, filters)
                         if (list.isNotEmpty()) warmup.request(list.map { it.id })
                         emit(list)
                     } finally {
@@ -168,50 +181,72 @@ class SearchViewModel @Inject constructor(
         savedState[KEY_FILTERS] = Gson().toJson(_filters.value)
     }
 
-    fun onCertificationChange(certification: String?) {
-        _filters.value = _filters.value.copy(certification = certification)
+    /** Adds or removes a single age rating. */
+    fun onCertificationToggle(certification: String) {
+        val current = _filters.value.certification
+        val next = if (certification in current) current - certification else current + certification
+        _filters.value = _filters.value.copy(certification = next)
         savedState[KEY_FILTERS] = Gson().toJson(_filters.value)
     }
 
+    /** Clears every selected age rating. */
+    fun onCertificationClear() {
+        _filters.value = _filters.value.copy(certification = emptySet())
+        savedState[KEY_FILTERS] = Gson().toJson(_filters.value)
+    }
+
+    /** Switching country changes the available ratings, so the selection is reset. */
     fun onCertificationCountryChange(country: String) {
-        _filters.value = _filters.value.copy(certificationCountry = country)
+        _filters.value = _filters.value.copy(certificationCountry = country, certification = emptySet())
         savedState[KEY_FILTERS] = Gson().toJson(_filters.value)
     }
 
     private suspend fun search(q: String, filters: SearchFilters): List<CatalogEntry> {
-        val (base, year) = splitTitleYear(q)
-        val direct = candidatesFor(base, year, filters)
-        if (direct.isNotEmpty()) return applyFilter(direct, filters)
-
-        // Glued-query fallback: insert a space at each position (e.g. "breakingbad" -> "breaking bad").
-        if ((!base.contains(' ')) && (base.length >= 6)) {
-            val maxVariants = minOf(base.length - 1, 20)
-            for (i in 1..maxVariants) {
-                val variant = base.substring(0, i) + " " + base.substring(i)
-                val found = candidatesFor(variant, year, filters)
-                if (found.isNotEmpty()) return applyFilter(found, filters)
-            }
+        val query = q.trim()
+        if (query.length < 2) {
+            // No text query: browse the catalogue with the active filters.
+            return applyFilter(discoverCandidates(filters), filters)
         }
 
-        // Typo-tolerant last resort: fuzzy-match the query against candidates.
-        return applyFilter(fuzzyCandidates(base, year), filters)
+        val (base, year) = splitTitleYear(query)
+        val direct = candidatesFor(base, year, filters)
+        val directFiltered = applyFilter(direct, filters)
+        if (directFiltered.isNotEmpty()) return directFiltered
+
+        // Glued-query fallback: insert a space at each position (e.g. "breakingbad" -> "breaking bad").
+        val gluedFiltered = applyFilter(gluedCandidates(base, year, filters), filters)
+        if (gluedFiltered.isNotEmpty()) return gluedFiltered
+
+        // Typo-tolerant last resort: fuzzy-match the query against the candidates we already have.
+        return applyFilter(fuzzyCandidates(direct, base), filters)
     }
 
-    // "Inception 2010" -> ("Inception", 2010).
+    // "Inception 2010" -> ("Inception", 2010). A bare year stays a title ("2012").
     private fun splitTitleYear(query: String): Pair<String, Int?> {
         val yearRegex = Regex("\\b((?:19|20)\\d{2})\\b")
         val m = yearRegex.find(query) ?: return query.trim() to null
         val year = m.groupValues[1].toIntOrNull()
         val title = query.removeRange(m.range).trim()
+        if (title.isBlank()) return query.trim() to null
         return title to year
     }
 
-    // Fuzzy fallback: run the search once, rank by similarity, keep close matches.
-    private suspend fun fuzzyCandidates(query: String, year: Int?): List<CatalogEntry> {
-        if (query.length < 3) return emptyList()
-        val all = candidatesFor(query, year, SearchFilters.DEFAULT)
-        if (all.isEmpty()) return emptyList()
-        return all.map { entry ->
+    // Glued-query fallback; bounded so a typo cannot stall the field for many seconds.
+    private suspend fun gluedCandidates(query: String, year: Int?, filters: SearchFilters): List<CatalogEntry> {
+        if (query.contains(' ') || query.length < 6) return emptyList()
+        val maxVariants = minOf(query.length - 1, GLUED_VARIANT_LIMIT)
+        for (i in 1..maxVariants) {
+            val variant = query.substring(0, i) + " " + query.substring(i)
+            val found = candidatesFor(variant, year, filters)
+            if (found.isNotEmpty()) return found
+        }
+        return emptyList()
+    }
+
+    // Fuzzy fallback: rank the candidates we already have by title similarity.
+    private fun fuzzyCandidates(candidates: List<CatalogEntry>, query: String): List<CatalogEntry> {
+        if (query.length < 3 || candidates.isEmpty()) return emptyList()
+        return candidates.map { entry ->
             val score = com.ftpflix.util.TitleMatchingUtils
                 .calculateSimilarityScore(query, entry.title)
             entry to score
@@ -220,6 +255,10 @@ class SearchViewModel @Inject constructor(
             .sortedByDescending { it.second }
             .map { it.first }
     }
+
+    // Browse by filters only; the repository routes this to TMDB's discover endpoint.
+    private suspend fun discoverCandidates(filters: SearchFilters): List<CatalogEntry> =
+        candidatesFor("", null, filters)
 
     private suspend fun candidatesFor(query: String, year: Int?, filters: SearchFilters): List<CatalogEntry> {
         val parsed = ParsedName(
@@ -240,6 +279,8 @@ class SearchViewModel @Inject constructor(
                 genreIds = candidate.genreIds,
                 voteAverage = candidate.voteAverage,
                 originalLanguage = candidate.originalLanguage,
+                popularity = candidate.popularity,
+                releaseDate = candidate.releaseDate,
             )
         }
     }
@@ -252,7 +293,7 @@ class SearchViewModel @Inject constructor(
                     SearchSort.Relevance -> seq
                     SearchSort.Popularity -> seq.sortedByDescending { it.popularity ?: 0.0 }
                     SearchSort.Rating -> seq.sortedByDescending { it.voteAverage }
-                    SearchSort.ReleaseDate -> seq.sortedByDescending { it.year ?: 0 }
+                    SearchSort.ReleaseDate -> seq.sortedByDescending { it.releaseDate ?: it.year?.let { y -> "$y-01-01" } ?: "" }
                     SearchSort.Title -> seq.sortedBy { it.title.lowercase() }
                 }
             }
@@ -260,21 +301,23 @@ class SearchViewModel @Inject constructor(
             .toList()
 
     private fun CatalogEntry.matches(filters: SearchFilters): Boolean {
-        if (filters.type != SearchFilter.All && kind != filters.type.name.lowercase()) return false
-        if (filters.yearFrom != null && (year == null || year < filters.yearFrom!!)) return false
-        if (filters.yearTo != null && (year == null || year > filters.yearTo!!)) return false
+        val wantedKind = filters.type.catalogKind()
+        if (wantedKind != null && kind != wantedKind) return false
+        val from = filters.yearFrom
+        val to = filters.yearTo
+        if (from != null && (year == null || year < from)) return false
+        if (to != null && (year == null || year > to)) return false
         if (filters.genres.isNotEmpty()) {
             if (!filters.genres.all { genreId -> genreId in genreIds }) return false
         }
         if (filters.minRating > 0 && voteAverage < filters.minRating) return false
-        if (filters.languages.isNotEmpty() && originalLanguage.isNotBlank()) {
-            if (originalLanguage !in filters.languages) return false
-        }
+        if (filters.languages.isNotEmpty() && originalLanguage !in filters.languages) return false
         return true
     }
 
     private companion object {
         private const val KEY_QUERY = "search_query"
         private const val KEY_FILTERS = "search_filters"
+        private const val GLUED_VARIANT_LIMIT = 4
     }
 }
