@@ -159,6 +159,7 @@ dependencies {
     implementation(libs.okhttp)
     debugImplementation(libs.okhttp.logging)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.gson)
 
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)

@@ -13,7 +13,10 @@ data class CatalogEntry(
     val genres: List<String> = emptyList(),
     val popularity: Double? = null,
     val imdbId: String? = null,
-    val hasFile: Boolean = true
+    val hasFile: Boolean = true,
+    val genreIds: List<Int> = emptyList(),
+    val voteAverage: Double = 0.0,
+    val originalLanguage: String = "",
 ) {
     val matchKey: String get() = "$id"
 }

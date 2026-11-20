@@ -81,11 +81,15 @@ interface TmdbService {
         @Query("api_key") apiKey: String,
         @Query("sort_by") sortBy: String = "popularity.desc",
         @Query("with_genres") withGenres: String? = null,
+        @Query("vote_average.gte") voteAverageGte: Double? = null,
+        @Query("with_original_language") withOriginalLanguage: String? = null,
         @Query("query") textQuery: String? = null,
         @Query("page") page: Int = 1,
         @Query("language") language: String = "en-US",
         // Released titles only.
+        @Query("primary_release_date.gte") primaryReleaseDateGte: String? = null,
         @Query("primary_release_date.lte") primaryReleaseDateLte: String? = null,
+        @Query("first_air_date.gte") firstAirDateGte: String? = null,
         @Query("first_air_date.lte") firstAirDateLte: String? = null,
     ): TmdbPaged<TmdbMovie>
 

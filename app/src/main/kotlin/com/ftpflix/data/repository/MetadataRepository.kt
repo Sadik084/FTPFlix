@@ -13,6 +13,10 @@ import com.ftpflix.data.remote.TmdbReleaseDates
 import com.ftpflix.data.remote.TmdbService
 import com.ftpflix.data.remote.TmdbTv
 import com.ftpflix.domain.parser.ParsedName
+import com.ftpflix.ui.search.SearchFilters
+import com.ftpflix.ui.search.SearchSort
+import com.ftpflix.ui.search.SearchFilter
+import com.ftpflix.data.remote.TmdbGenre
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -30,6 +34,11 @@ data class TitleCandidate(
     val year: Int?,
     val posterUrl: String?,
     val actors: String?,
+    val genreIds: List<Int> = emptyList(),
+    val voteAverage: Double = 0.0,
+    val voteCount: Int = 0,
+    val originalLanguage: String = "",
+    val popularity: Double = 0.0,
 )
 
 // Episode name + air date from TMDB.
@@ -193,8 +202,19 @@ class MetadataRepository @Inject constructor(
     }
 
     private val searchCache = ConcurrentHashMap<String, List<TitleCandidate>>()
+    private val discoverCache = ConcurrentHashMap<String, List<TitleCandidate>>()
+    private val genreCache = ConcurrentHashMap<String, List<TmdbGenre>>()
 
-    suspend fun candidatesFor(parsed: ParsedName): List<TitleCandidate> {
+    suspend fun candidatesFor(parsed: ParsedName, filters: SearchFilters = SearchFilters.DEFAULT): List<TitleCandidate> {
+        // If there's a text query, use search endpoint + client-side filtering
+        if (parsed.title.isNotBlank()) {
+            return searchCandidates(parsed, filters)
+        }
+        // No text query: use discover endpoint for server-side filtering
+        return discoverCandidates(parsed, filters)
+    }
+
+    private suspend fun searchCandidates(parsed: ParsedName, filters: SearchFilters): List<TitleCandidate> {
         val cacheKey = parsed.title.trim().lowercase() + (parsed.year?.let { "|$it" } ?: "")
         searchCache[cacheKey]?.let { return it }
         val (movies, tv) = coroutineScope {
@@ -209,8 +229,21 @@ class MetadataRepository @Inject constructor(
             m.await() to t.await()
         }
         val query = parsed.title
-        val out = (movies + tv)
+        var out = (movies + tv)
             .distinctBy { it.imdbId }
+        // Client-side filter for genres, rating, language (now available in TitleCandidate)
+        if (filters.genres.isNotEmpty()) {
+            out = out.filter { candidate ->
+                filters.genres.all { genreId -> genreId in candidate.genreIds }
+            }
+        }
+        if (filters.minRating > 0) {
+            out = out.filter { it.voteAverage >= filters.minRating }
+        }
+        if (filters.languages.isNotEmpty()) {
+            out = out.filter { candidate -> candidate.originalLanguage in filters.languages }
+        }
+        out = out
             .map { candidate ->
                 val score = com.ftpflix.util.TitleMatchingUtils.calculateSimilarityScore(query, candidate.title)
                 candidate to score
@@ -219,6 +252,95 @@ class MetadataRepository @Inject constructor(
             .map { it.first }
         if (out.isNotEmpty()) searchCache[cacheKey] = out
         return out
+    }
+
+    private suspend fun discoverCandidates(parsed: ParsedName, filters: SearchFilters): List<TitleCandidate> {
+        val cacheKey = buildDiscoverCacheKey(parsed, filters)
+        discoverCache[cacheKey]?.let { return it }
+        
+        val kinds = when (filters.type) {
+            SearchFilter.All -> listOf("movie", "tv")
+            SearchFilter.Movies -> listOf("movie")
+            SearchFilter.Series -> listOf("tv")
+            else -> listOf("movie", "tv")
+        }
+        
+        val sortBy = when (filters.sortBy) {
+            SearchSort.Popularity -> "popularity.desc"
+            SearchSort.Rating -> "vote_average.desc"
+            SearchSort.ReleaseDate -> "primary_release_date.desc"
+            SearchSort.Title -> "original_title.asc"
+            else -> "popularity.desc" // Relevance not supported by discover, default to popularity
+        }
+        
+        val genreParam = filters.genres.joinToString(",").takeIf { it.isNotBlank() }
+        val languageParam = filters.languages.joinToString(",").takeIf { it.isNotBlank() }
+        val minRating = filters.minRating.takeIf { it > 0 }
+        
+        val yearGte = filters.yearFrom?.let { "$it-01-01" }
+        val yearLte = filters.yearTo?.let { "$it-12-31" }
+        
+        val results = coroutineScope {
+            kinds.map { kind ->
+                async(Dispatchers.IO) {
+                    runCatching {
+                        tmdb.discover(
+                            kind = kind,
+                            apiKey = apiKey,
+                            sortBy = sortBy,
+                            withGenres = genreParam,
+                            voteAverageGte = minRating,
+                            withOriginalLanguage = languageParam,
+                            primaryReleaseDateGte = if (kind == "movie") yearGte else null,
+                            primaryReleaseDateLte = if (kind == "movie") yearLte else null,
+                            firstAirDateGte = if (kind == "tv") yearGte else null,
+                            firstAirDateLte = if (kind == "tv") yearLte else null,
+                        ).results.map { it.toCandidate(kind) }
+                    }.getOrDefault(emptyList())
+                }
+            }.awaitAll()
+        }
+        
+        val out = results.flatten().distinctBy { it.imdbId }
+        if (out.isNotEmpty()) discoverCache[cacheKey] = out
+        return out
+    }
+
+    private fun buildDiscoverCacheKey(parsed: ParsedName, filters: SearchFilters): String {
+        return "discover|" + filters.type.name +
+            "|" + filters.genres.joinToString(",") +
+            "|" + (filters.yearFrom ?: "") +
+            "|" + (filters.yearTo ?: "") +
+            "|" + filters.minRating +
+            "|" + filters.languages.joinToString(",") +
+            "|" + filters.sortBy.name
+    }
+
+    private suspend fun getCandidateVoteAverage(imdbId: String): Double {
+        // Fetch vote_average from details if needed
+        // For now return 0 (will be filtered out if minRating > 0)
+        return 0.0
+    }
+
+    /** Fetch genre lists from TMDB (cached) */
+    suspend fun getMovieGenres(): List<TmdbGenre> {
+        genreCache["movie"]?.let { return it }
+        val genres = runCatching { tmdb.movieGenres(apiKey).genres }.getOrDefault(emptyList())
+        if (genres.isNotEmpty()) genreCache["movie"] = genres
+        return genres
+    }
+
+    suspend fun getTvGenres(): List<TmdbGenre> {
+        genreCache["tv"]?.let { return it }
+        val genres = runCatching { tmdb.tvGenres(apiKey).genres }.getOrDefault(emptyList())
+        if (genres.isNotEmpty()) genreCache["tv"] = genres
+        return genres
+    }
+
+    suspend fun getAllGenres(): List<TmdbGenre> {
+        val movie = getMovieGenres()
+        val tv = getTvGenres()
+        return (movie + tv).distinctBy { it.id }
     }
 
     suspend fun clearCache() {
@@ -232,6 +354,11 @@ class MetadataRepository @Inject constructor(
         year = releaseDate?.take(4)?.toIntOrNull(),
         posterUrl = posterPath?.let { imageUrl(it, "w500") },
         actors = null,
+        genreIds = genreIds,
+        voteAverage = voteAverage,
+        voteCount = voteCount,
+        originalLanguage = originalLanguage,
+        popularity = popularity,
     )
 
     private fun TmdbTv.toCandidate(kind: String) = TitleCandidate(
@@ -240,6 +367,11 @@ class MetadataRepository @Inject constructor(
         year = firstAirDate?.take(4)?.toIntOrNull(),
         posterUrl = posterPath?.let { imageUrl(it, "w500") },
         actors = null,
+        genreIds = genreIds,
+        voteAverage = voteAverage,
+        voteCount = voteCount,
+        originalLanguage = "",
+        popularity = popularity,
     )
 
     private fun toMetadata(any: Any, mediaId: String): MovieMetadata? = when (any) {
