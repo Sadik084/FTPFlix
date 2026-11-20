@@ -158,6 +158,7 @@ dependencies {
     implementation(libs.retrofit.kotlinx.serialization)
     implementation(libs.okhttp)
     debugImplementation(libs.okhttp.logging)
+    debugImplementation(libs.leakcanary.android)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.gson)
 
