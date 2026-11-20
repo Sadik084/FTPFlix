@@ -22,8 +22,12 @@ import com.ftpflix.ui.theme.Spacing
 import com.valentinilk.shimmer.shimmer
 
 @Composable
-fun PosterSkeleton(width: Dp = 132.dp) {
-    Column(Modifier.width(width).shimmer()) {
+fun PosterSkeleton(width: Dp? = null) {
+    Column(
+        Modifier
+            .then(if (width != null) Modifier.width(width) else Modifier.fillMaxWidth())
+            .shimmer()
+    ) {
         Box(
             Modifier
                 .fillMaxWidth()
@@ -62,7 +66,7 @@ fun SkeletonShelf() {
             contentPadding = PaddingValues(horizontal = Spacing.lg),
             horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
-            items(6) { PosterSkeleton() }
+            items(6) { PosterSkeleton(132.dp) }
         }
     }
 }

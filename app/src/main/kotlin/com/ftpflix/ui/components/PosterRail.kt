@@ -16,6 +16,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.ftpflix.data.model.CatalogEntry
 import com.ftpflix.ui.theme.Spacing
 
@@ -55,6 +56,7 @@ fun PosterRail(
                     year = it.year,
                     posterUrl = it.posterUrl,
                     ageRating = ageRatingOf(it),
+                    width = 132.dp,
                     onClick = { onItemClick(it) },
                 )
             }

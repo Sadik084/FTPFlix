@@ -48,7 +48,8 @@ fun PosterCard(
     posterUrl: String? = null,
     badge: String? = null,
     ageRating: String? = null,
-    width: Dp = 132.dp,
+    /** Fixed width for horizontal rails; null fills the grid cell. */
+    width: Dp? = null,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
@@ -66,7 +67,7 @@ fun PosterCard(
     // No clip() on the column: it shaved the left edge of the year line; the poster box clips itself.
     Column(
         modifier = modifier
-            .width(width)
+            .then(if (width != null) Modifier.width(width) else Modifier.fillMaxWidth())
             .pressScale(pressed)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .semantics {

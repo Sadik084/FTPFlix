@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.ftpflix.core.config.AgeRatingStore
 import com.ftpflix.core.config.RatingWarmup
+import com.ftpflix.core.config.RecentSearchStore
 import com.ftpflix.data.model.CatalogEntry
 import com.ftpflix.data.repository.MetadataRepository
 import com.ftpflix.data.repository.SearchUnavailableException
@@ -14,6 +15,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -25,6 +27,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
@@ -88,6 +92,7 @@ class SearchViewModel @Inject constructor(
     private val metadata: MetadataRepository,
     ageRatings: AgeRatingStore,
     private val warmup: RatingWarmup,
+    private val recentSearches: RecentSearchStore,
     private val savedState: SavedStateHandle,
 ) : ViewModel() {
 
@@ -96,6 +101,19 @@ class SearchViewModel @Inject constructor(
 
     private val _query = MutableStateFlow(savedState.get<String>(KEY_QUERY) ?: "")
     val query: StateFlow<String> = _query.asStateFlow()
+
+    /** Explicit submits (IME action) bypass the typing debounce. */
+    private val _submittedQuery = MutableSharedFlow<String>(extraBufferCapacity = 1)
+
+    /** Query text that drives the search: debounced typing plus explicit submits. */
+    private val effectiveQuery = merge(
+        _query.map { it.trim() }.debounce(300.milliseconds).distinctUntilChanged(),
+        _submittedQuery,
+    ).distinctUntilChanged()
+
+    /** Last few search terms, newest first. */
+    val recent: StateFlow<List<String>> = recentSearches.recent
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private val _filters = MutableStateFlow(
         savedState.get<String>(KEY_FILTERS)?.let { json ->
@@ -128,7 +146,7 @@ class SearchViewModel @Inject constructor(
     private val _retryTick = MutableStateFlow(0)
 
     val results: StateFlow<List<CatalogEntry>> = combine(
-        _query.debounce(300.milliseconds).distinctUntilChanged(),
+        effectiveQuery,
         _filters.debounce(300.milliseconds).distinctUntilChanged(),
         _retryTick,
     ) { q, f, _ -> q to f }
@@ -155,6 +173,24 @@ class SearchViewModel @Inject constructor(
     /** Re-runs the current search, e.g. after a failure. */
     fun retry() {
         _retryTick.value += 1
+    }
+
+    /** Applies the current query right away (IME "Search" action). */
+    fun submitQuery() {
+        val trimmed = _query.value.trim()
+        viewModelScope.launch { recentSearches.record(trimmed) }
+        _submittedQuery.tryEmit(trimmed)
+    }
+
+    /** Runs a stored search term again. */
+    fun searchTerm(term: String) {
+        _query.value = term
+        submitQuery()
+    }
+
+    /** Clears the stored search terms. */
+    fun clearRecent() {
+        viewModelScope.launch { recentSearches.clear() }
     }
 
     /** Human readable reason for a failed search round. */

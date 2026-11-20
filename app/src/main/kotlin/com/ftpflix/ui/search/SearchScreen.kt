@@ -3,6 +3,7 @@
 package com.ftpflix.ui.search
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,11 +19,13 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.FilterList
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -34,12 +37,16 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -67,8 +74,17 @@ fun SearchScreen(
     val ageRatings by vm.ageRatings.collectAsStateWithLifecycle()
     val results by vm.results.collectAsStateWithLifecycle()
     val status by vm.status.collectAsStateWithLifecycle()
+    val recent by vm.recent.collectAsStateWithLifecycle()
     var showFilters by remember { mutableStateOf(false) }
     val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    val focusRequester = remember { FocusRequester() }
+    val gridState = rememberLazyGridState()
+
+    // The field takes focus as soon as the screen opens.
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+    // A new query starts the result list from the top.
+    LaunchedEffect(query) { gridState.scrollToItem(0) }
 
     Column(
         Modifier
@@ -117,12 +133,15 @@ fun SearchScreen(
                 unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
             ),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = { 
+            keyboardActions = KeyboardActions(onSearch = {
                 keyboardController?.hide()
+                focusManager.clearFocus()
+                vm.submitQuery()
             }),
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = Spacing.lg),
+                .padding(horizontal = Spacing.lg)
+                .focusRequester(focusRequester),
         )
 
         Spacer(Modifier.height(Spacing.md))
@@ -155,12 +174,21 @@ fun SearchScreen(
         val error = status.error
         when {
             !showResults -> {
-                EmptyState(
-                    icon = Icons.Rounded.Search,
-                    title = "Search your library",
-                    message = "Find movies and shows by title.",
-                    modifier = Modifier.weight(1f),
-                )
+                if (recent.isEmpty()) {
+                    EmptyState(
+                        icon = Icons.Rounded.Search,
+                        title = "Search your library",
+                        message = "Find movies and shows by title.",
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    RecentSearchList(
+                        terms = recent,
+                        onSelect = vm::searchTerm,
+                        onClear = vm::clearRecent,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
             error != null -> {
                 ErrorState(
@@ -205,6 +233,7 @@ fun SearchScreen(
                         )
                     }
                     LazyVerticalGrid(
+                        state = gridState,
                         columns = GridCells.Adaptive(minSize = 120.dp),
                         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
                         verticalArrangement = Arrangement.spacedBy(Spacing.lg),
@@ -351,3 +380,54 @@ private fun ActiveFilterRow(
 }
 
 private val entryContentType: (CatalogEntry) -> Any? = { (_, _, _, _, _, _, _, _, _) -> "entry" }
+
+/** Previously used search terms, newest first. */
+@Composable
+private fun RecentSearchList(
+    terms: List<String>,
+    onSelect: (String) -> Unit,
+    onClear: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.lg),
+        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Recent searches",
+                style = FtpTypography.titleSmall,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onClear) {
+                Text("Clear", style = FtpTypography.labelSmall)
+            }
+        }
+        terms.forEach { term ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onSelect(term) }
+                    .padding(vertical = Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Rounded.History,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = term,
+                    style = FtpTypography.bodyMedium,
+                    modifier = Modifier.padding(start = Spacing.md),
+                )
+            }
+        }
+    }
+}
