@@ -105,7 +105,7 @@ class SearchViewModel @Inject constructor(
     ) { q, f -> q to f }
         .flatMapLatest { (q, filters) ->
             flow {
-                if (q.trim().length < 2 && !filters.hasActiveFilters) {
+                if (q.trim().length < 2) {
                     emit(emptyList())
                 } else {
                     _searching.value = true

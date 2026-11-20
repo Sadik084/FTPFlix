@@ -201,8 +201,6 @@ class MetadataRepository @Inject constructor(
         return rating
     }
 
-    private val searchCache = ConcurrentHashMap<String, List<TitleCandidate>>()
-    private val discoverCache = ConcurrentHashMap<String, List<TitleCandidate>>()
     private val genreCache = ConcurrentHashMap<String, List<TmdbGenre>>()
 
     suspend fun candidatesFor(parsed: ParsedName, filters: SearchFilters = SearchFilters.DEFAULT): List<TitleCandidate> {
@@ -215,8 +213,6 @@ class MetadataRepository @Inject constructor(
     }
 
     private suspend fun searchCandidates(parsed: ParsedName, filters: SearchFilters): List<TitleCandidate> {
-        val cacheKey = parsed.title.trim().lowercase() + (parsed.year?.let { "|$it" } ?: "")
-        searchCache[cacheKey]?.let { return it }
         val (movies, tv) = coroutineScope {
             val m = async(Dispatchers.IO) {
                 runCatching { tmdb.searchMovie(apiKey, parsed.title, parsed.year).results.map { it.toCandidate("movie") } }
@@ -250,14 +246,10 @@ class MetadataRepository @Inject constructor(
             }
             .sortedByDescending { it.second }
             .map { it.first }
-        if (out.isNotEmpty()) searchCache[cacheKey] = out
         return out
     }
 
     private suspend fun discoverCandidates(parsed: ParsedName, filters: SearchFilters): List<TitleCandidate> {
-        val cacheKey = buildDiscoverCacheKey(parsed, filters)
-        discoverCache[cacheKey]?.let { return it }
-        
         val kinds = when (filters.type) {
             SearchFilter.All -> listOf("movie", "tv")
             SearchFilter.Movies -> listOf("movie")
@@ -302,24 +294,7 @@ class MetadataRepository @Inject constructor(
         }
         
         val out = results.flatten().distinctBy { it.imdbId }
-        if (out.isNotEmpty()) discoverCache[cacheKey] = out
         return out
-    }
-
-    private fun buildDiscoverCacheKey(parsed: ParsedName, filters: SearchFilters): String {
-        return "discover|" + filters.type.name +
-            "|" + filters.genres.joinToString(",") +
-            "|" + (filters.yearFrom ?: "") +
-            "|" + (filters.yearTo ?: "") +
-            "|" + filters.minRating +
-            "|" + filters.languages.joinToString(",") +
-            "|" + filters.sortBy.name
-    }
-
-    private suspend fun getCandidateVoteAverage(imdbId: String): Double {
-        // Fetch vote_average from details if needed
-        // For now return 0 (will be filtered out if minRating > 0)
-        return 0.0
     }
 
     /** Fetch genre lists from TMDB (cached) */
