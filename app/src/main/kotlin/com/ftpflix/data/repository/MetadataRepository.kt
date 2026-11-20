@@ -52,6 +52,18 @@ data class EpisodeMeta(
     val airDate: String?,
 )
 
+/** Raised when every TMDB call of a search round failed. */
+class SearchUnavailableException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+/** Runs a TMDB call, keeping failures as results so partial outages stay usable. */
+private suspend inline fun <T> tmdbCall(crossinline block: suspend () -> T): Result<T> = try {
+    Result.success(block())
+} catch (e: CancellationException) {
+    throw e
+} catch (e: Exception) {
+    Result.failure(e)
+}
+
 // TMDB metadata provider; Room-cached, negatively cached on failure.
 @Singleton
 class MetadataRepository @Inject constructor(
@@ -213,17 +225,21 @@ class MetadataRepository @Inject constructor(
      * Certification for a specific country, falling back to the preferred-country value.
      * Used to filter search results by age rating.
      */
-    suspend fun certificationFor(mediaId: String, country: String): String? {
+    suspend fun certificationFor(mediaId: String, country: String): String? =
+        certificationResult(mediaId, country).getOrNull()
+
+    /** Same as [certificationFor] but keeps failures so callers can react to outages. */
+    private suspend fun certificationResult(mediaId: String, country: String): Result<String?> {
         val cacheKey = "$mediaId|$country"
-        certificationCache[cacheKey]?.let { return it }
+        certificationCache[cacheKey]?.let { return Result.success(it) }
         if (country == "US") {
             metadataDao.get("tmdb", mediaId)?.ageRating?.takeIf { it.isNotBlank() }?.let {
                 certificationCache[cacheKey] = it
-                return it
+                return Result.success(it)
             }
         }
-        val m = idPattern.matchEntire(mediaId) ?: return null
-        val id = m.groupValues[2].toLongOrNull() ?: return null
+        val m = idPattern.matchEntire(mediaId) ?: return Result.success(null)
+        val id = m.groupValues[2].toLongOrNull() ?: return Result.success(null)
         val kind = m.groupValues[1]
         val rating = try {
             withTimeout(8.seconds) {
@@ -232,15 +248,15 @@ class MetadataRepository @Inject constructor(
             }
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
             breaker.failure("tmdb")
-            null
+            return Result.failure(e)
         }
         if (!rating.isNullOrBlank()) {
             breaker.success("tmdb")
             certificationCache[cacheKey] = rating
         }
-        return rating
+        return Result.success(rating)
     }
 
     private val genreCache = ConcurrentHashMap<String, List<TmdbGenre>>()
@@ -262,11 +278,11 @@ class MetadataRepository @Inject constructor(
         }
         // Filters are applied client-side, so pull an extra page when they are active.
         val pages = if (filters.hasContentFilters) SEARCH_PAGES_FILTERED else 1
-        val results = coroutineScope {
+        val outcomes = coroutineScope {
             kinds.flatMap { kind ->
                 (1..pages).map { page ->
                     async(Dispatchers.IO) {
-                        runCatching {
+                        tmdbCall {
                             when (kind) {
                                 "movie" -> tmdb.searchMovie(apiKey, parsed.title, parsed.year, page = page)
                                     .results.map { it.toCandidate("movie") }
@@ -274,12 +290,15 @@ class MetadataRepository @Inject constructor(
                                 else -> tmdb.searchTv(apiKey, parsed.title, parsed.year, page = page)
                                     .results.map { it.toCandidate("tv") }
                             }
-                        }.getOrDefault(emptyList())
+                        }
                     }
                 }
             }.awaitAll()
         }
-        val pool = results.flatten().distinctBy { it.imdbId }
+        if (outcomes.isNotEmpty() && outcomes.all { it.isFailure }) {
+            throw SearchUnavailableException("TMDB search failed", outcomes.first().exceptionOrNull())
+        }
+        val pool = outcomes.flatMap { it.getOrDefault(emptyList()) }.distinctBy { it.imdbId }
         val rated = applyCertification(pool, filters)
         // Rank by title similarity; the client applies the remaining filters.
         val query = parsed.title
@@ -302,16 +321,20 @@ class MetadataRepository @Inject constructor(
         if (wanted.isEmpty() || candidates.isEmpty()) return candidates
         val country = filters.certificationCountry
         val scoped = candidates.take(MAX_CERT_LOOKUPS)
-        return coroutineScope {
+        val outcomes = coroutineScope {
             val semaphore = Semaphore(CERT_CONCURRENCY)
-            val ratings = scoped.map { candidate ->
+            scoped.map { candidate ->
                 async(Dispatchers.IO) {
-                    semaphore.withPermit { certificationFor(candidate.imdbId, country) }
+                    semaphore.withPermit { certificationResult(candidate.imdbId, country) }
                 }
             }.awaitAll()
-            scoped.zip(ratings)
-                .filter { (_, cert) -> cert != null && cert in wanted }
-                .map { it.first }
+        }
+        if (outcomes.isNotEmpty() && outcomes.all { it.isFailure }) {
+            throw SearchUnavailableException("Could not load age ratings", outcomes.first().exceptionOrNull())
+        }
+        return scoped.zip(outcomes).mapNotNull { (candidate, outcome) ->
+            val cert = outcome.getOrNull()
+            if (cert != null && cert in wanted) candidate else null
         }
     }
 
@@ -335,7 +358,7 @@ class MetadataRepository @Inject constructor(
         val yearGte = filters.yearFrom?.let { "$it-01-01" }
         val yearLte = filters.yearTo?.let { "$it-12-31" }
 
-        val results = coroutineScope {
+        val outcomes = coroutineScope {
             browsableKinds.flatMap { kind ->
                 val certs = if (selected.isEmpty()) {
                     listOf<String?>(null)
@@ -344,7 +367,7 @@ class MetadataRepository @Inject constructor(
                 }
                 certs.map { cert ->
                     async(Dispatchers.IO) {
-                        runCatching {
+                        tmdbCall {
                             tmdb.discover(
                                 kind = kind,
                                 apiKey = apiKey,
@@ -359,13 +382,16 @@ class MetadataRepository @Inject constructor(
                                 certification = cert,
                                 certificationCountry = if (cert != null) country else null,
                             ).results.map { it.toCandidate(kind) }
-                        }.getOrDefault(emptyList())
+                        }
                     }
                 }
             }.awaitAll()
         }
+        if (outcomes.isNotEmpty() && outcomes.all { it.isFailure }) {
+            throw SearchUnavailableException("TMDB discover failed", outcomes.first().exceptionOrNull())
+        }
 
-        return results.flatten().distinctBy { it.imdbId }
+        return outcomes.flatMap { it.getOrDefault(emptyList()) }.distinctBy { it.imdbId }
     }
 
     /** Certification values that apply to a media kind in the given country. */

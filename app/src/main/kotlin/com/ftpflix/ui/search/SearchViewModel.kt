@@ -7,6 +7,7 @@ import com.ftpflix.core.config.AgeRatingStore
 import com.ftpflix.core.config.RatingWarmup
 import com.ftpflix.data.model.CatalogEntry
 import com.ftpflix.data.repository.MetadataRepository
+import com.ftpflix.data.repository.SearchUnavailableException
 import com.ftpflix.domain.parser.ParsedName
 import com.google.gson.Gson
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -17,11 +18,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlin.time.Duration.Companion.milliseconds
 import javax.inject.Inject
@@ -63,6 +68,12 @@ data class SearchFilters(
         get() = genres.isNotEmpty() || yearFrom != null || yearTo != null ||
             minRating > 0 || languages.isNotEmpty() || certification.isNotEmpty()
 }
+
+/** Loading and error state of the current search. */
+data class SearchStatus(
+    val loading: Boolean = false,
+    val error: String? = null,
+)
 
 /** Catalog kind ("movie"/"series") a type filter maps to; null means "all kinds". */
 internal fun SearchFilter.catalogKind(): String? = when (this) {
@@ -109,32 +120,50 @@ class SearchViewModel @Inject constructor(
         return _genres.value.map { com.ftpflix.ui.components.GenreItem(it.id, it.name) }
     }
 
-    /** True while a debounced search round-trip is in flight. */
-    private val _searching = MutableStateFlow(value = false)
-    val searching: StateFlow<Boolean> = _searching.asStateFlow()
+    /** Loading/error state of the current search round. */
+    private val _status = MutableStateFlow(SearchStatus())
+    val status: StateFlow<SearchStatus> = _status.asStateFlow()
+
+    /** Bumped by [retry] to re-run the current search. */
+    private val _retryTick = MutableStateFlow(0)
 
     val results: StateFlow<List<CatalogEntry>> = combine(
         _query.debounce(300.milliseconds).distinctUntilChanged(),
         _filters.debounce(300.milliseconds).distinctUntilChanged(),
-    ) { q, f -> q to f }
+        _retryTick,
+    ) { q, f, _ -> q to f }
         .flatMapLatest { (q, filters) ->
-            flow {
-                val trimmed = q.trim()
-                if (trimmed.length < 2 && !filters.hasActiveFilters) {
-                    emit(emptyList())
-                } else {
-                    _searching.value = true
-                    try {
-                        val list = search(trimmed, filters)
-                        if (list.isNotEmpty()) warmup.request(list.map { it.id })
-                        emit(list)
-                    } finally {
-                        _searching.value = false
-                    }
+            val trimmed = q.trim()
+            if (trimmed.length < 2 && !filters.hasActiveFilters) {
+                flowOf(emptyList<CatalogEntry>()).onStart { _status.value = SearchStatus() }
+            } else {
+                flow {
+                    val list = search(trimmed, filters)
+                    if (list.isNotEmpty()) warmup.request(list.map { it.id })
+                    emit(list)
                 }
+                    .onStart { _status.value = SearchStatus(loading = true) }
+                    .onCompletion { cause -> if (cause == null) _status.value = SearchStatus() }
+                    .catch { error ->
+                        _status.value = SearchStatus(error = errorMessage(error))
+                        emit(emptyList())
+                    }
             }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Re-runs the current search, e.g. after a failure. */
+    fun retry() {
+        _retryTick.value += 1
+    }
+
+    /** Human readable reason for a failed search round. */
+    private fun errorMessage(error: Throwable): String = when (error) {
+        is SearchUnavailableException -> "Could not reach TMDB. Check your connection and try again."
+        is java.net.SocketTimeoutException -> "The request timed out. Try again."
+        is java.net.UnknownHostException -> "No internet connection. Check your network and try again."
+        else -> "Something went wrong while loading results."
+    }
 
     fun onQueryChange(value: String) {
         _query.value = value

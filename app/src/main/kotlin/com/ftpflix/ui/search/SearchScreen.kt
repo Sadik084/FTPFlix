@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -45,6 +46,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ftpflix.data.model.CatalogEntry
 import com.ftpflix.ui.components.EmptyState
+import com.ftpflix.ui.components.ErrorState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.KeyboardActions
 import com.ftpflix.ui.components.PosterCard
@@ -64,7 +66,7 @@ fun SearchScreen(
     val filters by vm.filters.collectAsStateWithLifecycle()
     val ageRatings by vm.ageRatings.collectAsStateWithLifecycle()
     val results by vm.results.collectAsStateWithLifecycle()
-    val searching by vm.searching.collectAsStateWithLifecycle()
+    val status by vm.status.collectAsStateWithLifecycle()
     var showFilters by remember { mutableStateOf(false) }
     val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
 
@@ -150,51 +152,77 @@ fun SearchScreen(
         Spacer(Modifier.height(Spacing.md))
 
         val showResults = query.trim().length >= 2 || filters.hasActiveFilters
-        if (!showResults) {
-            EmptyState(
-                icon = Icons.Rounded.Search,
-                title = "Search your library",
-                message = "Find movies and shows by title.",
-                modifier = Modifier.weight(1f),
-            )
-        } else if (searching && results.isEmpty()) {
-            // First batch hasn't landed yet: shimmer grid instead of a spinner or a premature "no results".
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 120.dp),
-                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-                verticalArrangement = Arrangement.spacedBy(Spacing.lg),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                    start = Spacing.lg, end = Spacing.lg, bottom = Spacing.huge,
-                ),
-                modifier = Modifier.weight(1f),
-            ) {
-                items(12) { PosterSkeleton() }
+        val error = status.error
+        when {
+            !showResults -> {
+                EmptyState(
+                    icon = Icons.Rounded.Search,
+                    title = "Search your library",
+                    message = "Find movies and shows by title.",
+                    modifier = Modifier.weight(1f),
+                )
             }
-        } else if (results.isEmpty()) {
-            EmptyState(
-                icon = Icons.Rounded.Search,
-                title = "No results for “$query”",
-                message = "Check the spelling or try a different title.",
-                modifier = Modifier.weight(1f),
-            )
-        } else {
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 120.dp),
-                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
-                verticalArrangement = Arrangement.spacedBy(Spacing.lg),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                    start = Spacing.lg, end = Spacing.lg, bottom = Spacing.huge,
-                ),
-                modifier = Modifier.weight(1f),
-            ) {
-                items(results, key = CatalogEntry::id, contentType = entryContentType) {
-                    PosterCard(
-                        title = it.title,
-                        year = it.year,
-                        posterUrl = it.posterUrl,
-                        ageRating = ageRatings[it.id.removePrefix("tmdb:")],
-                        onClick = { onOpen(it) },
-                    )
+            error != null -> {
+                ErrorState(
+                    message = error,
+                    onRetry = vm::retry,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            status.loading && results.isEmpty() -> {
+                // First batch hasn't landed yet: shimmer grid instead of a spinner or a premature "no results".
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(minSize = 120.dp),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.lg),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        start = Spacing.lg, end = Spacing.lg, bottom = Spacing.huge,
+                    ),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    items(12) { PosterSkeleton() }
+                }
+            }
+            results.isEmpty() -> {
+                EmptyState(
+                    icon = Icons.Rounded.Search,
+                    title = if (query.isBlank()) "No results" else "No results for “$query”",
+                    message = if (query.isBlank()) {
+                        "No titles match these filters. Try loosening them."
+                    } else {
+                        "Check the spelling or try a different title."
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            else -> {
+                Column(Modifier.weight(1f)) {
+                    if (status.loading) {
+                        // Keep the previous titles visible while the next round loads.
+                        LinearProgressIndicator(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(minSize = 120.dp),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.lg),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                            start = Spacing.lg, end = Spacing.lg, bottom = Spacing.huge,
+                        ),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        items(results, key = CatalogEntry::id, contentType = entryContentType) {
+                            PosterCard(
+                                title = it.title,
+                                year = it.year,
+                                posterUrl = it.posterUrl,
+                                ageRating = ageRatings[it.id.removePrefix("tmdb:")],
+                                onClick = { onOpen(it) },
+                            )
+                        }
+                    }
                 }
             }
         }
