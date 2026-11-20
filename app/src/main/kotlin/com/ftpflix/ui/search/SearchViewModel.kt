@@ -47,6 +47,8 @@ data class SearchFilters(
     val minRating: Double = 0.0,                 // Minimum vote_average
     val languages: Set<String> = emptySet(),     // ISO 639-1 codes (en, es, etc.)
     val sortBy: SearchSort = SearchSort.Relevance,
+    val certification: String? = null,           // e.g. "PG-13", "R", "TV-MA"
+    val certificationCountry: String = "US",    // Certification country code
 ) {
     companion object {
         val DEFAULT = SearchFilters()
@@ -54,7 +56,7 @@ data class SearchFilters(
 
     /** Whether any filter beyond the default type is active */
     val hasActiveFilters: Boolean
-        get() = genres.isNotEmpty() || yearFrom != null || yearTo != null || minRating > 0 || languages.isNotEmpty() || sortBy != SearchSort.Relevance
+        get() = genres.isNotEmpty() || yearFrom != null || yearTo != null || minRating > 0 || languages.isNotEmpty() || sortBy != SearchSort.Relevance || certification != null
 }
 
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
@@ -163,6 +165,16 @@ class SearchViewModel @Inject constructor(
 
     fun onSortChange(sort: SearchSort) {
         _filters.value = _filters.value.copy(sortBy = sort)
+        savedState[KEY_FILTERS] = Gson().toJson(_filters.value)
+    }
+
+    fun onCertificationChange(certification: String?) {
+        _filters.value = _filters.value.copy(certification = certification)
+        savedState[KEY_FILTERS] = Gson().toJson(_filters.value)
+    }
+
+    fun onCertificationCountryChange(country: String) {
+        _filters.value = _filters.value.copy(certificationCountry = country)
         savedState[KEY_FILTERS] = Gson().toJson(_filters.value)
     }
 

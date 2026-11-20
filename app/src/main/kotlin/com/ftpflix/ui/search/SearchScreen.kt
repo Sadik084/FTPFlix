@@ -143,6 +143,7 @@ fun SearchScreen(
                 onChangeRating = { rating -> vm.onMinRatingChange(rating) },
                 onChangeLanguage = { lang -> vm.onLanguageFilterChange(lang) },
                 onChangeSort = { sort -> vm.onSortChange(sort) },
+                onChangeCertification = { vm.onCertificationChange(null) },
             )
         }
 
@@ -220,6 +221,7 @@ private fun ActiveFilterRow(
     onChangeRating: (Double) -> Unit,
     onChangeLanguage: (String) -> Unit,
     onChangeSort: (SearchSort) -> Unit,
+    onChangeCertification: () -> Unit,
 ) {
     val activeChips = mutableListOf<@Composable () -> Unit>()
     
@@ -287,6 +289,18 @@ private fun ActiveFilterRow(
                 selected = false,
                 onClick = { onChangeSort(SearchSort.Relevance) },
                 label = { Text(sortName, style = FtpTypography.labelSmall) },
+                modifier = Modifier.padding(end = Spacing.xs),
+            )
+        })
+    }
+    
+    if (filters.certification != null) {
+        val cert = filters.certification!!
+        activeChips.add({
+            FilterChip(
+                selected = false,
+                onClick = { onChangeCertification() },
+                label = { Text(cert, style = FtpTypography.labelSmall) },
                 modifier = Modifier.padding(end = Spacing.xs),
             )
         })

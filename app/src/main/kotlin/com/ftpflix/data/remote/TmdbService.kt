@@ -91,6 +91,11 @@ interface TmdbService {
         @Query("primary_release_date.lte") primaryReleaseDateLte: String? = null,
         @Query("first_air_date.gte") firstAirDateGte: String? = null,
         @Query("first_air_date.lte") firstAirDateLte: String? = null,
+        // Certification filters
+        @Query("certification") certification: String? = null,
+        @Query("certification_country") certificationCountry: String? = null,
+        @Query("certification.lte") certificationLte: String? = null,
+        @Query("certification.gte") certificationGte: String? = null,
     ): TmdbPaged<TmdbMovie>
 
     // Light tv details; used for the season list.

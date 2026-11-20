@@ -268,6 +268,8 @@ class MetadataRepository @Inject constructor(
         val genreParam = filters.genres.joinToString(",").takeIf { it.isNotBlank() }
         val languageParam = filters.languages.joinToString(",").takeIf { it.isNotBlank() }
         val minRating = filters.minRating.takeIf { it > 0 }
+        val certification = filters.certification?.takeIf { it.isNotBlank() }
+        val certificationCountry = filters.certificationCountry.takeIf { it.isNotBlank() }
         
         val yearGte = filters.yearFrom?.let { "$it-01-01" }
         val yearLte = filters.yearTo?.let { "$it-12-31" }
@@ -287,6 +289,8 @@ class MetadataRepository @Inject constructor(
                             primaryReleaseDateLte = if (kind == "movie") yearLte else null,
                             firstAirDateGte = if (kind == "tv") yearGte else null,
                             firstAirDateLte = if (kind == "tv") yearLte else null,
+                            certification = certification,
+                            certificationCountry = certificationCountry,
                         ).results.map { it.toCandidate(kind) }
                     }.getOrDefault(emptyList())
                 }

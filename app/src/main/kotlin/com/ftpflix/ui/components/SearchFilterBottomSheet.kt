@@ -63,6 +63,12 @@ private val LANGUAGE_OPTIONS = listOf(
     "te" to "Telugu",
 )
 
+/** Movie certification options (US ratings). */
+private val MOVIE_CERTIFICATIONS = listOf("G", "PG", "PG-13", "R", "NC-17")
+
+/** TV certification options (US ratings). */
+private val TV_CERTIFICATIONS = listOf("TV-Y", "TV-G", "TV-PG", "TV-14", "TV-MA")
+
 /** Preset minimum-rating options; empty string means no rating filter. */
 private val RATING_OPTIONS = listOf("", "7.0", "8.0", "9.0")
 
@@ -96,6 +102,8 @@ fun SearchFilterBottomSheet(
     var yearTo by remember(filters.yearTo) { mutableStateOf(filters.yearTo?.toString() ?: "") }
     var minRating by remember(filters.minRating) { mutableStateOf(filters.minRating.takeIf { it > 0 }?.toString() ?: "") }
     var sortBy by remember(filters.sortBy) { mutableStateOf(filters.sortBy) }
+    var certification by remember(filters.certification) { mutableStateOf(filters.certification ?: "") }
+    var certificationCountry by remember(filters.certificationCountry) { mutableStateOf(filters.certificationCountry) }
 
     fun commit() {
         onApply(
@@ -107,6 +115,8 @@ fun SearchFilterBottomSheet(
                 yearTo = yearTo.toIntOrNull(),
                 minRating = minRating.toDoubleOrNull() ?: 0.0,
                 sortBy = sortBy,
+                certification = certification.takeIf { it.isNotBlank() },
+                certificationCountry = certificationCountry,
             )
         )
     }
@@ -119,6 +129,8 @@ fun SearchFilterBottomSheet(
         yearTo = ""
         minRating = ""
         sortBy = SearchSort.Relevance
+        certification = ""
+        certificationCountry = "US"
     }
 
     ModalBottomSheet(
@@ -271,6 +283,57 @@ fun SearchFilterBottomSheet(
                                 onClick = { minRating = rating },
                                 label = { Text(ratingLabel(rating), style = FtpTypography.labelMedium) },
                             )
+                        }
+                    }
+                }
+
+                FilterSection("Age Rating") {
+                    Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                        // Movie certifications
+                        Text(
+                            text = "Movies",
+                            style = FtpTypography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                        ) {
+                            FilterChip(
+                                selected = certification.isEmpty(),
+                                onClick = { certification = "" },
+                                label = { Text("Any", style = FtpTypography.labelMedium) },
+                            )
+                            MOVIE_CERTIFICATIONS.forEach { cert ->
+                                FilterChip(
+                                    selected = certification == cert,
+                                    onClick = { certification = cert },
+                                    label = { Text(cert, style = FtpTypography.labelMedium) },
+                                )
+                            }
+                        }
+                        // TV certifications
+                        Text(
+                            text = "TV",
+                            style = FtpTypography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                        ) {
+                            FilterChip(
+                                selected = certification.isEmpty(),
+                                onClick = { certification = "" },
+                                label = { Text("Any", style = FtpTypography.labelMedium) },
+                            )
+                            TV_CERTIFICATIONS.forEach { cert ->
+                                FilterChip(
+                                    selected = certification == cert,
+                                    onClick = { certification = cert },
+                                    label = { Text(cert, style = FtpTypography.labelMedium) },
+                                )
+                            }
                         }
                     }
                 }
