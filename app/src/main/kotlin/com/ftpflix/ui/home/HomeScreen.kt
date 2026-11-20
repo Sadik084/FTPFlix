@@ -55,6 +55,9 @@ fun HomeScreen(
 
     ScrollRefreshRateHint(listState)
 
+    // Show skeletons during initial load or pull-to-refresh
+    val showSkeletons = (isLoading && shelves.isEmpty()) || isRefreshing
+
     // Hero runs under the status bar; glass header sits over it with a scrim.
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         PullToRefreshBox(
@@ -69,21 +72,23 @@ fun HomeScreen(
                 contentPadding = PaddingValues(bottom = Spacing.huge),
             ) {
                 item(key = "hero") {
-                    hero?.let { heroEntry ->
-                        HeroBanner(
-                            hero = heroEntry,
-                            inMyList = heroInMyList,
-                            onPlay = { onOpen(heroEntry) },
-                            onToggleMyList = vm::toggleHeroMyList,
-                        )
+                    if (showSkeletons) {
+                        SkeletonShelf()
+                    } else {
+                        hero?.let { heroEntry ->
+                            HeroBanner(
+                                hero = heroEntry,
+                                inMyList = heroInMyList,
+                                onPlay = { onOpen(heroEntry) },
+                                onToggleMyList = vm::toggleHeroMyList,
+                            )
+                        }
                     }
                 }
 
-                if (isLoading && shelves.isEmpty()) {
+                if (showSkeletons) {
                     items(3) { SkeletonShelf() }
-                }
-
-                if (continueWatching.isNotEmpty()) {
+                } else if (continueWatching.isNotEmpty()) {
                     item(key = "continue") {
                         ContinueWatchingRail(
                             items = continueWatching,
@@ -93,13 +98,15 @@ fun HomeScreen(
                     }
                 }
 
-                items(shelves, key = Shelf::id, contentType = shelfContentType) { (shelfId, shelfTitle, shelfItems, shelfSeeAll) ->
-                    PosterRail(
-                        title = shelfTitle,
-                        items = shelfItems,
-                        onItemClick = onOpen,
-                        onSeeAll = if (shelfSeeAll) ({ onSeeAll(shelfId) }) else null,
-                    ) { (id, _, _, _, _, _, _, _, _) -> ageRatings[id.removePrefix("tmdb:")] }
+                if (!showSkeletons) {
+                    items(shelves, key = Shelf::id, contentType = shelfContentType) { (shelfId, shelfTitle, shelfItems, shelfSeeAll) ->
+                        PosterRail(
+                            title = shelfTitle,
+                            items = shelfItems,
+                            onItemClick = onOpen,
+                            onSeeAll = if (shelfSeeAll) ({ onSeeAll(shelfId) }) else null,
+                        ) { (id, _, _, _, _, _, _, _, _) -> ageRatings[id.removePrefix("tmdb:")] }
+                    }
                 }
             }
         }

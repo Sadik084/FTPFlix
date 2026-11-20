@@ -97,13 +97,16 @@ fun LibraryScreen(
             Box(Modifier.height(Spacing.md))
         }
 
+        // Show skeletons during initial load or pull-to-refresh
+        val showSkeletons = (items.isEmpty() && initialLoading) || isRefreshing
+
         PullToRefreshBox(
             isRefreshing = isRefreshing,
             onRefresh = vm::refresh,
             modifier = Modifier.fillMaxWidth().weight(1f),
         ) {
             when {
-                items.isEmpty() && initialLoading -> {
+                showSkeletons -> {
                     LazyVerticalGrid(
                         columns = GridCells.Adaptive(minSize = 120.dp),
                         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
